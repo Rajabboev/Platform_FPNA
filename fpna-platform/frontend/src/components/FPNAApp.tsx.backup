@@ -1,0 +1,644 @@
+// src/components/FPNAApp.tsx - Connected to Real Backend
+import React, { useState, useEffect } from 'react';
+import { 
+  Upload, 
+  Download, 
+  FileSpreadsheet, 
+  TrendingUp, 
+  DollarSign, 
+  Users, 
+  Calendar,
+  ChevronRight,
+  Filter,
+  Search,
+  Check,
+  X,
+  Clock,
+  Loader2,
+  AlertCircle
+} from 'lucide-react';
+import { budgetAPI, authAPI } from '../services/api';
+
+// Types
+interface Budget {
+  id: number;
+  budget_code: string;
+  fiscal_year: number;
+  department: string | null;
+  branch: string | null;
+  total_amount: number;
+  currency: string;
+  status: string;
+  created_at: string;
+  line_items_count?: number;
+}
+
+interface BudgetDetail extends Budget {
+  line_items: LineItem[];
+}
+
+interface LineItem {
+  id: number;
+  account_code: string;
+  account_name: string;
+  category: string | null;
+  month: number | null;
+  amount: number;
+  quantity: number | null;
+  unit_price: number | null;
+}
+
+// Status Badge Component
+const StatusBadge = ({ status }: { status: string }) => {
+  const statusColors: Record<string, string> = {
+    DRAFT: 'bg-gray-100 text-gray-700',
+    APPROVED: 'bg-green-100 text-green-700',
+    REJECTED: 'bg-red-100 text-red-700',
+    PENDING_L1: 'bg-yellow-100 text-yellow-700',
+    PENDING_L2: 'bg-yellow-100 text-yellow-700',
+    PENDING_L3: 'bg-yellow-100 text-yellow-700',
+    PENDING_L4: 'bg-yellow-100 text-yellow-700',
+  };
+
+  return (
+    <span className={`px-3 py-1 rounded-full text-xs font-semibold ${statusColors[status] || 'bg-gray-100 text-gray-700'}`}>
+      {status.replace('_', ' ')}
+    </span>
+  );
+};
+
+// Loading Spinner
+const LoadingSpinner = () => (
+  <div className="flex items-center justify-center h-64">
+    <Loader2 className="w-8 h-8 text-primary-600 animate-spin" />
+  </div>
+);
+
+// Error Message
+const ErrorMessage = ({ message }: { message: string }) => (
+  <div className="bg-red-50 border border-red-200 rounded-lg p-4 flex items-start gap-3">
+    <AlertCircle className="w-5 h-5 text-red-600 flex-shrink-0 mt-0.5" />
+    <div>
+      <p className="text-red-800 font-medium">Error</p>
+      <p className="text-red-700 text-sm mt-1">{message}</p>
+    </div>
+  </div>
+);
+
+// Main App Component
+const FPNAApp = () => {
+  const [currentPage, setCurrentPage] = useState('dashboard');
+  const [budgets, setBudgets] = useState<Budget[]>([]);
+  const [selectedBudget, setSelectedBudget] = useState<BudgetDetail | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [uploadedFile, setUploadedFile] = useState<File | null>(null);
+  const [uploadProgress, setUploadProgress] = useState(false);
+
+  // Fetch budgets on mount
+  useEffect(() => {
+    if (currentPage === 'dashboard') {
+      fetchBudgets();
+    }
+  }, [currentPage]);
+
+  const fetchBudgets = async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const data = await budgetAPI.list();
+      setBudgets(data);
+    } catch (err: any) {
+      setError(err.response?.data?.detail || 'Failed to fetch budgets');
+      console.error('Error fetching budgets:', err);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const fetchBudgetDetails = async (id: number) => {
+    setLoading(true);
+    setError(null);
+    try {
+      const data = await budgetAPI.get(id);
+      setSelectedBudget(data);
+      setCurrentPage('details');
+    } catch (err: any) {
+      setError(err.response?.data?.detail || 'Failed to fetch budget details');
+      console.error('Error fetching budget details:', err);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleUpload = async () => {
+    if (!uploadedFile) return;
+
+    setUploadProgress(true);
+    setError(null);
+    try {
+      const result = await budgetAPI.upload(uploadedFile, 'current_user');
+      alert(`Budget uploaded successfully! Code: ${result.budget_code}`);
+      setUploadedFile(null);
+      setCurrentPage('dashboard');
+      fetchBudgets();
+    } catch (err: any) {
+      setError(err.response?.data?.detail || 'Failed to upload budget');
+      console.error('Error uploading:', err);
+    } finally {
+      setUploadProgress(false);
+    }
+  };
+
+  const handleDownloadTemplate = async () => {
+    try {
+      const blob = await budgetAPI.downloadTemplate();
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'budget_template.xlsx';
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      window.URL.revokeObjectURL(url);
+    } catch (err: any) {
+      setError('Failed to download template');
+      console.error('Error downloading template:', err);
+    }
+  };
+
+  const handleDeleteBudget = async (id: number) => {
+    if (!confirm('Are you sure you want to delete this budget?')) return;
+
+    try {
+      await budgetAPI.delete(id);
+      alert('Budget deleted successfully');
+      fetchBudgets();
+    } catch (err: any) {
+      setError(err.response?.data?.detail || 'Failed to delete budget');
+    }
+  };
+
+  // Dashboard Page
+  const Dashboard = () => {
+    const stats = {
+      total: budgets.length,
+      totalAmount: budgets.reduce((sum, b) => sum + Number(b.total_amount), 0),
+      pending: budgets.filter(b => b.status.includes('PENDING')).length,
+      approved: budgets.filter(b => b.status === 'APPROVED').length,
+    };
+
+    return (
+      <div className="space-y-6">
+        <div className="flex justify-between items-center">
+          <h1 className="text-3xl font-bold text-gray-900">Dashboard</h1>
+          <button 
+            onClick={() => setCurrentPage('upload')}
+            className="bg-primary-600 hover:bg-primary-700 text-white px-4 py-2 rounded-lg flex items-center gap-2"
+          >
+            <Upload className="w-4 h-4" />
+            Upload Budget
+          </button>
+        </div>
+
+        {error && <ErrorMessage message={error} />}
+
+        {/* Stats Cards */}
+        <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
+          <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-sm text-gray-600">Total Budgets</p>
+                <p className="text-2xl font-bold text-gray-900 mt-1">{stats.total}</p>
+              </div>
+              <div className="bg-blue-100 p-3 rounded-lg">
+                <FileSpreadsheet className="w-6 h-6 text-blue-600" />
+              </div>
+            </div>
+          </div>
+
+          <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-sm text-gray-600">Total Amount</p>
+                <p className="text-2xl font-bold text-gray-900 mt-1">
+                  ${(stats.totalAmount / 1000000).toFixed(2)}M
+                </p>
+              </div>
+              <div className="bg-green-100 p-3 rounded-lg">
+                <DollarSign className="w-6 h-6 text-green-600" />
+              </div>
+            </div>
+          </div>
+
+          <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-sm text-gray-600">Pending Approval</p>
+                <p className="text-2xl font-bold text-gray-900 mt-1">{stats.pending}</p>
+              </div>
+              <div className="bg-yellow-100 p-3 rounded-lg">
+                <Clock className="w-6 h-6 text-yellow-600" />
+              </div>
+            </div>
+          </div>
+
+          <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-sm text-gray-600">Approved</p>
+                <p className="text-2xl font-bold text-gray-900 mt-1">{stats.approved}</p>
+              </div>
+              <div className="bg-green-100 p-3 rounded-lg">
+                <Check className="w-6 h-6 text-green-600" />
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* Recent Budgets Table */}
+        <div className="bg-white rounded-xl shadow-sm border border-gray-200">
+          <div className="p-6 border-b border-gray-200 flex justify-between items-center">
+            <h2 className="text-xl font-semibold text-gray-900">All Budgets</h2>
+            <button 
+              onClick={fetchBudgets}
+              className="text-primary-600 hover:text-primary-700 text-sm font-medium"
+            >
+              Refresh
+            </button>
+          </div>
+          
+          {loading ? (
+            <LoadingSpinner />
+          ) : budgets.length === 0 ? (
+            <div className="p-12 text-center text-gray-500">
+              <FileSpreadsheet className="w-12 h-12 mx-auto mb-3 text-gray-400" />
+              <p>No budgets found. Upload your first budget!</p>
+            </div>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full">
+                <thead className="bg-gray-50">
+                  <tr>
+                    <th className="px-6 py-3 text-left text-xs font-semibold text-gray-700 uppercase">Budget Code</th>
+                    <th className="px-6 py-3 text-left text-xs font-semibold text-gray-700 uppercase">Fiscal Year</th>
+                    <th className="px-6 py-3 text-left text-xs font-semibold text-gray-700 uppercase">Department</th>
+                    <th className="px-6 py-3 text-left text-xs font-semibold text-gray-700 uppercase">Branch</th>
+                    <th className="px-6 py-3 text-left text-xs font-semibold text-gray-700 uppercase">Amount</th>
+                    <th className="px-6 py-3 text-left text-xs font-semibold text-gray-700 uppercase">Status</th>
+                    <th className="px-6 py-3 text-left text-xs font-semibold text-gray-700 uppercase">Actions</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-100">
+                  {budgets.map((budget) => (
+                    <tr key={budget.id} className="hover:bg-gray-50">
+                      <td className="px-6 py-4 text-sm font-medium text-gray-900">{budget.budget_code}</td>
+                      <td className="px-6 py-4 text-sm text-gray-600">{budget.fiscal_year}</td>
+                      <td className="px-6 py-4 text-sm text-gray-600">{budget.department || '-'}</td>
+                      <td className="px-6 py-4 text-sm text-gray-600">{budget.branch || '-'}</td>
+                      <td className="px-6 py-4 text-sm font-semibold text-gray-900">
+                        ${Number(budget.total_amount).toLocaleString()}
+                      </td>
+                      <td className="px-6 py-4 text-sm">
+                        <StatusBadge status={budget.status} />
+                      </td>
+                      <td className="px-6 py-4 text-sm space-x-2">
+                        <button 
+                          onClick={() => fetchBudgetDetails(budget.id)}
+                          className="text-primary-600 hover:text-primary-700 font-medium"
+                        >
+                          View
+                        </button>
+                        {budget.status === 'DRAFT' && (
+                          <button 
+                            onClick={() => handleDeleteBudget(budget.id)}
+                            className="text-red-600 hover:text-red-700 font-medium"
+                          >
+                            Delete
+                          </button>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  };
+
+  // Budget Details Page
+  const BudgetDetails = () => {
+    if (!selectedBudget) return <LoadingSpinner />;
+
+    return (
+      <div className="space-y-6">
+        <div className="flex items-center gap-2 text-sm text-gray-600">
+          <button onClick={() => setCurrentPage('dashboard')} className="hover:text-primary-600">
+            Budgets
+          </button>
+          <ChevronRight className="w-4 h-4" />
+          <span className="text-gray-900 font-medium">{selectedBudget.budget_code}</span>
+        </div>
+
+        {error && <ErrorMessage message={error} />}
+
+        {/* Budget Header */}
+        <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
+          <div className="flex justify-between items-start">
+            <div>
+              <h1 className="text-2xl font-bold text-gray-900">{selectedBudget.budget_code}</h1>
+              <p className="text-gray-600 mt-1">
+                {selectedBudget.department || 'No Department'} - {selectedBudget.branch || 'No Branch'}
+              </p>
+            </div>
+            <StatusBadge status={selectedBudget.status} />
+          </div>
+
+          <div className="grid grid-cols-4 gap-6 mt-6">
+            <div>
+              <p className="text-sm text-gray-600">Fiscal Year</p>
+              <p className="text-lg font-semibold text-gray-900 mt-1">{selectedBudget.fiscal_year}</p>
+            </div>
+            <div>
+              <p className="text-sm text-gray-600">Total Amount</p>
+              <p className="text-lg font-semibold text-gray-900 mt-1">
+                ${Number(selectedBudget.total_amount).toLocaleString()}
+              </p>
+            </div>
+            <div>
+              <p className="text-sm text-gray-600">Line Items</p>
+              <p className="text-lg font-semibold text-gray-900 mt-1">{selectedBudget.line_items.length}</p>
+            </div>
+            <div>
+              <p className="text-sm text-gray-600">Created</p>
+              <p className="text-lg font-semibold text-gray-900 mt-1">
+                {new Date(selectedBudget.created_at).toLocaleDateString()}
+              </p>
+            </div>
+          </div>
+        </div>
+
+        {/* Line Items Table */}
+        <div className="bg-white rounded-xl shadow-sm border border-gray-200">
+          <div className="p-6 border-b border-gray-200">
+            <h2 className="text-xl font-semibold text-gray-900">Budget Line Items</h2>
+          </div>
+          <div className="overflow-x-auto">
+            <table className="w-full">
+              <thead className="bg-gray-50">
+                <tr>
+                  <th className="px-6 py-3 text-left text-xs font-semibold text-gray-700 uppercase">Account Code</th>
+                  <th className="px-6 py-3 text-left text-xs font-semibold text-gray-700 uppercase">Account Name</th>
+                  <th className="px-6 py-3 text-left text-xs font-semibold text-gray-700 uppercase">Category</th>
+                  <th className="px-6 py-3 text-left text-xs font-semibold text-gray-700 uppercase">Month</th>
+                  <th className="px-6 py-3 text-right text-xs font-semibold text-gray-700 uppercase">Amount</th>
+                  <th className="px-6 py-3 text-right text-xs font-semibold text-gray-700 uppercase">Quantity</th>
+                  <th className="px-6 py-3 text-right text-xs font-semibold text-gray-700 uppercase">Unit Price</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-100">
+                {selectedBudget.line_items.map((item) => (
+                  <tr key={item.id} className="hover:bg-gray-50">
+                    <td className="px-6 py-4 text-sm font-medium text-gray-900">{item.account_code}</td>
+                    <td className="px-6 py-4 text-sm text-gray-900">{item.account_name}</td>
+                    <td className="px-6 py-4 text-sm text-gray-600">{item.category || '-'}</td>
+                    <td className="px-6 py-4 text-sm text-gray-600">{item.month || '-'}</td>
+                    <td className="px-6 py-4 text-sm font-semibold text-right text-gray-900">
+                      ${Number(item.amount).toLocaleString()}
+                    </td>
+                    <td className="px-6 py-4 text-sm text-right text-gray-600">
+                      {item.quantity ? Number(item.quantity).toLocaleString() : '-'}
+                    </td>
+                    <td className="px-6 py-4 text-sm text-right text-gray-600">
+                      {item.unit_price ? `$${Number(item.unit_price).toLocaleString()}` : '-'}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    );
+  };
+
+  // Excel Upload Page
+  const ExcelUpload = () => {
+    const [dragActive, setDragActive] = useState(false);
+
+    const handleDrag = (e: React.DragEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
+      if (e.type === "dragenter" || e.type === "dragover") {
+        setDragActive(true);
+      } else if (e.type === "dragleave") {
+        setDragActive(false);
+      }
+    };
+
+    const handleDrop = (e: React.DragEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
+      setDragActive(false);
+      
+      if (e.dataTransfer.files && e.dataTransfer.files[0]) {
+        setUploadedFile(e.dataTransfer.files[0]);
+      }
+    };
+
+    return (
+      <div className="space-y-6">
+        <h1 className="text-3xl font-bold text-gray-900">Upload Budget</h1>
+
+        {error && <ErrorMessage message={error} />}
+
+        {/* Upload Area */}
+        <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
+          <div
+            className={`border-2 border-dashed rounded-xl p-12 text-center transition-colors ${
+              dragActive ? 'border-primary-500 bg-primary-50' : 'border-gray-300'
+            }`}
+            onDragEnter={handleDrag}
+            onDragLeave={handleDrag}
+            onDragOver={handleDrag}
+            onDrop={handleDrop}
+          >
+            <Upload className="w-16 h-16 text-gray-400 mx-auto mb-4" />
+            <h3 className="text-lg font-semibold text-gray-900 mb-2">
+              Drop your Excel file here
+            </h3>
+            <p className="text-gray-600 mb-4">or click to browse</p>
+            <input
+              type="file"
+              accept=".xlsx,.xls"
+              className="hidden"
+              id="file-upload"
+              onChange={(e) => setUploadedFile(e.target.files?.[0] || null)}
+            />
+            <label
+              htmlFor="file-upload"
+              className="inline-block px-6 py-3 bg-primary-600 text-white rounded-lg cursor-pointer hover:bg-primary-700"
+            >
+              Choose File
+            </label>
+            <p className="text-sm text-gray-500 mt-4">
+              Supported formats: .xlsx, .xls (Max 10MB)
+            </p>
+          </div>
+
+          {uploadedFile && (
+            <div className="mt-6 p-4 bg-green-50 border border-green-200 rounded-lg flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <FileSpreadsheet className="w-5 h-5 text-green-600" />
+                <div>
+                  <p className="font-medium text-gray-900">{uploadedFile.name}</p>
+                  <p className="text-sm text-gray-600">{(uploadedFile.size / 1024).toFixed(2)} KB</p>
+                </div>
+              </div>
+              <button
+                onClick={() => setUploadedFile(null)}
+                className="text-red-600 hover:text-red-700"
+                disabled={uploadProgress}
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+          )}
+
+          {uploadedFile && (
+            <div className="mt-6 flex gap-3">
+              <button 
+                onClick={handleUpload}
+                disabled={uploadProgress}
+                className="flex-1 px-6 py-3 bg-primary-600 text-white rounded-lg hover:bg-primary-700 font-semibold disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+              >
+                {uploadProgress ? (
+                  <>
+                    <Loader2 className="w-5 h-5 animate-spin" />
+                    Uploading...
+                  </>
+                ) : (
+                  <>
+                    <Upload className="w-5 h-5" />
+                    Upload Budget
+                  </>
+                )}
+              </button>
+              <button 
+                onClick={() => setUploadedFile(null)}
+                disabled={uploadProgress}
+                className="px-6 py-3 border border-gray-300 rounded-lg hover:bg-gray-50 disabled:opacity-50"
+              >
+                Cancel
+              </button>
+            </div>
+          )}
+        </div>
+
+        {/* Template Download */}
+        <div className="bg-blue-50 border border-blue-200 rounded-xl p-6">
+          <div className="flex items-start gap-4">
+            <div className="bg-blue-100 p-3 rounded-lg">
+              <Download className="w-6 h-6 text-blue-600" />
+            </div>
+            <div className="flex-1">
+              <h3 className="text-lg font-semibold text-gray-900 mb-2">
+                Need a template?
+              </h3>
+              <p className="text-gray-600 mb-4">
+                Download our Excel template to ensure your data is in the correct format.
+              </p>
+              <button 
+                onClick={handleDownloadTemplate}
+                className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700"
+              >
+                Download Template
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  };
+
+  // Sidebar
+  const Sidebar = () => (
+    <div className="w-64 bg-white border-r border-gray-200 h-screen flex flex-col">
+      <div className="p-6 border-b border-gray-200">
+        <h1 className="text-2xl font-bold text-primary-600">FPNA</h1>
+        <p className="text-sm text-gray-600 mt-1">Financial Planning Platform</p>
+      </div>
+
+      <nav className="flex-1 p-4 space-y-1">
+        <button
+          onClick={() => setCurrentPage('dashboard')}
+          className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg transition-colors ${
+            currentPage === 'dashboard'
+              ? 'bg-primary-50 text-primary-700'
+              : 'text-gray-700 hover:bg-gray-50'
+          }`}
+        >
+          <TrendingUp className="w-5 h-5" />
+          <span className="font-medium">Dashboard</span>
+        </button>
+
+        <button
+          onClick={() => setCurrentPage('upload')}
+          className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg transition-colors ${
+            currentPage === 'upload'
+              ? 'bg-primary-50 text-primary-700'
+              : 'text-gray-700 hover:bg-gray-50'
+          }`}
+        >
+          <Upload className="w-5 h-5" />
+          <span className="font-medium">Upload Budget</span>
+        </button>
+
+        <button className="w-full flex items-center gap-3 px-4 py-3 rounded-lg text-gray-700 hover:bg-gray-50">
+          <FileSpreadsheet className="w-5 h-5" />
+          <span className="font-medium">Data Entry</span>
+        </button>
+
+        <button className="w-full flex items-center gap-3 px-4 py-3 rounded-lg text-gray-700 hover:bg-gray-50">
+          <Users className="w-5 h-5" />
+          <span className="font-medium">Approvals</span>
+        </button>
+
+        <button className="w-full flex items-center gap-3 px-4 py-3 rounded-lg text-gray-700 hover:bg-gray-50">
+          <Calendar className="w-5 h-5" />
+          <span className="font-medium">Analytics</span>
+        </button>
+      </nav>
+
+      <div className="p-4 border-t border-gray-200">
+        <div className="flex items-center gap-3">
+          <div className="w-10 h-10 bg-primary-100 rounded-full flex items-center justify-center">
+            <span className="text-primary-700 font-semibold">JD</span>
+          </div>
+          <div>
+            <p className="text-sm font-medium text-gray-900">John Doe</p>
+            <p className="text-xs text-gray-600">CFO</p>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+
+  return (
+    <div className="flex h-screen bg-gray-50">
+      <Sidebar />
+      <div className="flex-1 overflow-auto">
+        <div className="p-8">
+          {currentPage === 'dashboard' && <Dashboard />}
+          {currentPage === 'details' && <BudgetDetails />}
+          {currentPage === 'upload' && <ExcelUpload />}
+        </div>
+      </div>
+    </div>
+  );
+};
+
+export default FPNAApp;

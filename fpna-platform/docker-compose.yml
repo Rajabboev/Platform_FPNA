@@ -1,0 +1,27 @@
+version: '3.8'
+
+services:
+  # SQL Server service (optional - if you want to run DB in Docker)
+  # sqlserver:
+  #   image: mcr.microsoft.com/mssql/server:2019-latest
+  #   environment:
+  #     SA_PASSWORD: "YourStrong@Passw0rd"
+  #     ACCEPT_EULA: "Y"
+  #   ports:
+  #     - "1433:1433"
+  #   volumes:
+  #     - sqlserver_data:/var/opt/mssql
+
+  # Backend API service
+  api:
+    build: ./backend
+    ports:
+      - "8000:8000"
+    environment:
+      - DATABASE_SERVER=host.docker.internal
+    volumes:
+      - ./backend:/app
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+
+volumes:
+  sqlserver_data:

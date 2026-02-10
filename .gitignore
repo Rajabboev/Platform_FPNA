@@ -1,0 +1,44 @@
+# Environment and secrets
+.env
+.env.local
+.venv
+venv/
+*.env
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+.eggs/
+*.egg
+
+# Node
+node_modules/
+dist/
+dist-ssr/
+
+# IDE / OS
+.idea/
+.vscode/
+.DS_Store
+*.swp
+*.swo
+*~
+
+# Logs and cache
+*.log
+logs/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Backend uploads (keep folder, ignore large files)
+fpna-platform/backend/uploads/*
+!fpna-platform/backend/uploads/.gitkeep
+
+# Optional: uncomment to ignore Excel metadata if large
+# Metadata/

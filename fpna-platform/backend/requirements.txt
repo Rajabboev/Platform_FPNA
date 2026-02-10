@@ -1,0 +1,105 @@
+# Python 3.11+ Optimized Dependencies
+# FP&A Platform Backend Requirements
+# Tested with Python 3.11.6
+
+# ============================================
+# Core Framework
+# ============================================
+fastapi==0.109.0              # Latest stable, optimized for 3.11
+uvicorn[standard]==0.27.0     # ASGI server with performance improvements
+python-multipart==0.0.6       # File upload support
+
+# ============================================
+# Database - SQL Server
+# ============================================
+sqlalchemy==2.0.25            # SQLAlchemy 2.0 with 3.11 optimizations
+pyodbc==5.1.0                 # Latest SQL Server driver
+alembic==1.13.1               # Database migrations
+
+# ============================================
+# Authentication & Security
+# ============================================
+python-jose[cryptography]==3.3.0  # JWT tokens
+passlib[bcrypt]==1.7.4            # Password hashing
+python-dotenv==1.0.1              # Environment variables
+bcrypt==4.1.2                     # Bcrypt for passlib
+cryptography==42.0.2              # Cryptographic recipes
+
+# ============================================
+# Data Validation
+# ============================================
+pydantic==2.5.3               # Data validation (v2 with 3.11 boost)
+pydantic-settings==2.1.0      # Settings management
+pydantic-core==2.14.6         # Core validation engine
+email-validator==2.1.0        # Email validation
+annotated-types==0.6.0        # Type annotations
+
+# ============================================
+# Excel & Data Processing
+# ============================================
+openpyxl==3.1.2               # Excel read/write
+pandas==2.1.4                 # Data manipulation (3.11 optimized)
+numpy==1.26.3                 # Numerical computing (3.11 wheels)
+xlrd==2.0.1                   # Old Excel format support
+et-xmlfile==1.1.0             # XML support for openpyxl
+
+# ============================================
+# Testing
+# ============================================
+pytest==7.4.4                 # Testing framework
+pytest-asyncio==0.23.3        # Async test support
+pytest-cov==4.1.0             # Code coverage
+httpx==0.26.0                 # HTTP client for testing
+coverage==7.4.0               # Coverage reporting
+
+# ============================================
+# Development Tools (Optional but Recommended)
+# ============================================
+black==23.12.1                # Code formatting
+flake8==7.0.0                 # Linting
+mypy==1.8.0                   # Type checking
+isort==5.13.2                 # Import sorting
+ruff==0.1.11                  # Fast linter (alternative to flake8)
+
+# ============================================
+# Utilities
+# ============================================
+python-dateutil==2.8.2        # Date utilities
+pytz==2023.3                  # Timezone support
+typing-extensions==4.9.0      # Extended type hints
+
+# ============================================
+# Async & Performance
+# ============================================
+anyio==4.2.0                  # Async primitives
+starlette==0.35.1             # ASGI framework (FastAPI dependency)
+
+# ============================================
+# Monitoring & Logging (Optional)
+# ============================================
+# prometheus-client==0.19.0   # Metrics
+# python-json-logger==2.0.7   # JSON logging
+
+# ============================================
+# ML/AI Libraries (Install when needed)
+# ============================================
+# scikit-learn==1.4.0         # Machine learning
+# xgboost==2.0.3              # Gradient boosting
+# prophet==1.1.5              # Time series forecasting
+# mlflow==2.9.2               # ML experiment tracking
+# langchain==0.1.0            # LLM framework
+# openai==1.7.2               # OpenAI API
+
+# ============================================
+# Data Warehouse & ETL (Install when needed)
+# ============================================
+# apache-airflow==2.8.0       # Workflow orchestration
+# great-expectations==0.18.8  # Data validation
+# dbt-core==1.7.4             # Data transformation
+
+# ============================================
+# BI & Visualization (Install when needed)
+# ============================================
+# apache-superset==3.0.3      # Business intelligence
+# plotly==5.18.0              # Interactive charts
+# streamlit==1.30.0           # Quick dashboards
