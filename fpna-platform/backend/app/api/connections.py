@@ -32,16 +32,16 @@ router = APIRouter(prefix="/connections", tags=["connections"])
 def _conn_to_response(c: DWHConnection) -> ConnectionResponseSafe:
     return ConnectionResponseSafe(
         id=c.id,
-        name=c.name,
-        db_type=c.db_type,
-        host=c.host,
+        name=c.name or "",
+        db_type=c.db_type or "sql_server",
+        host=c.host or "",
         port=c.port,
-        database_name=c.database_name,
-        username=c.username,
+        database_name=c.database_name or "",
+        username=c.username or "",
         schema_name=c.schema_name,
-        use_ssl=c.use_ssl,
+        use_ssl=c.use_ssl if c.use_ssl is not None else False,
         description=c.description,
-        is_active=c.is_active,
+        is_active=c.is_active if c.is_active is not None else True,
         created_at=c.created_at.isoformat() if c.created_at else None,
     )
 
@@ -50,9 +50,13 @@ def _conn_to_response(c: DWHConnection) -> ConnectionResponseSafe:
 def list_connections(
     current_user: User = Depends(get_current_active_user),
     db: Session = Depends(get_db),
+    include_inactive: bool = False,
 ):
     """List all DWH connections."""
-    conns = db.query(DWHConnection).order_by(DWHConnection.name).all()
+    query = db.query(DWHConnection)
+    if not include_inactive:
+        query = query.filter(DWHConnection.is_active == True)
+    conns = query.order_by(DWHConnection.name).all()
     return [_conn_to_response(c) for c in conns]
 
 

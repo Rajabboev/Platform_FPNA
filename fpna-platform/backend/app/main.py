@@ -13,11 +13,18 @@ logger = logging.getLogger(__name__)
 from app.database import engine, Base
 
 # Import models to register with Base before create_all
-from app.models.budget import Budget, BudgetLineItem, BudgetApproval  # noqa: F401
+from app.models.budget import Budget, BudgetLineItem, BudgetApproval, BudgetLineItemCurrency  # noqa: F401
 from app.models.user import User, Role  # noqa: F401
 from app.models.notification import Notification  # noqa: F401
 from app.models.dwh_connection import DWHConnection, DWHTableMapping  # noqa: F401
 from app.models.etl_job import ETLJob, ETLRun  # noqa: F401
+from app.models.coa import AccountClass, AccountGroup, AccountCategory, Account, AccountMapping  # noqa: F401
+from app.models.business_unit import BusinessUnit, AccountResponsibility  # noqa: F401
+from app.models.snapshot import BalanceSnapshot, BaselineBudget, SnapshotImportLog  # noqa: F401
+from app.models.currency import Currency, CurrencyRate, BudgetFXRate  # noqa: F401
+from app.models.driver import Driver, DriverValue, DriverCalculationLog, GoldenRule  # noqa: F401
+from app.models.template import BudgetTemplate, TemplateSection, TemplateAssignment, TemplateLineItem  # noqa: F401
+from app.models.baseline import BaselineData, BudgetBaseline, BudgetPlanned  # noqa: F401
 
 # Create database tables (including dwh_connections, etl_jobs, etl_runs)
 Base.metadata.create_all(bind=engine)
@@ -183,16 +190,25 @@ async def health_check():
     }
 
 # Import routers AFTER app is created
-from app.api import books, budgets_excel, auth, approvals, notifications, connections, etl
+from app.api import books, budgets_excel, budgets_upload, auth, approvals, notifications, connections, etl, coa
+from app.api import snapshots, currencies, drivers, templates, dwh_integration, baseline
 
 # Include routers
 app.include_router(books.router, prefix="/api/v1")
 app.include_router(budgets_excel.router, prefix="/api/v1")
+app.include_router(budgets_upload.router, prefix="/api/v1")
 app.include_router(auth.router, prefix="/api/v1")
 app.include_router(approvals.router, prefix="/api/v1")
 app.include_router(notifications.router, prefix="/api/v1")
 app.include_router(connections.router, prefix="/api/v1")
 app.include_router(etl.router, prefix="/api/v1")
+app.include_router(coa.router, prefix="/api/v1")
+app.include_router(snapshots.router, prefix="/api/v1")
+app.include_router(currencies.router, prefix="/api/v1")
+app.include_router(drivers.router, prefix="/api/v1")
+app.include_router(templates.router, prefix="/api/v1")
+app.include_router(dwh_integration.router, prefix="/api/v1")
+app.include_router(baseline.router, prefix="/api/v1")
 
 # Root endpoint
 @app.get("/", tags=["root"])

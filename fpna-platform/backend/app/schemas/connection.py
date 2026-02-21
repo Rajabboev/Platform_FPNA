@@ -42,12 +42,20 @@ class ConnectionResponse(ConnectionBase):
         from_attributes = True
 
 
-class ConnectionResponseSafe(ConnectionBase):
+class ConnectionResponseSafe(BaseModel):
     """Response without password - for list/detail"""
     id: int
-    is_active: bool
+    name: str
+    db_type: str
+    host: str
+    port: Optional[int] = None
+    database_name: str
+    username: str
+    schema_name: Optional[str] = None
+    use_ssl: Optional[bool] = False
+    description: Optional[str] = None
+    is_active: bool = True
     created_at: Optional[str] = None
-    # password never returned
 
     class Config:
         from_attributes = True

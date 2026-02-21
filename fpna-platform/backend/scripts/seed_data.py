@@ -29,7 +29,7 @@ def seed_roles(db: Session):
         db.add(role)
         created += 1
     db.commit()
-    print(f"✅ Roles done ({created} created, {len(ROLE_PERMISSIONS) - created} already existed)")
+    print(f"[OK] Roles done ({created} created, {len(ROLE_PERMISSIONS) - created} already existed)")
 
 
 def seed_users(db: Session):
@@ -67,8 +67,8 @@ def seed_users(db: Session):
         created += 1
 
     db.commit()
-    print(f"✅ Users done ({created} created, {len(users_data) - created} already existed)")
-    print("\n📝 Test credentials (all use password: password123):")
+    print(f"[OK] Users done ({created} created, {len(users_data) - created} already existed)")
+    print("\nTest credentials (all use password: password123):")
     for user_data in users_data:
         print(f"   - {user_data['username']} ({user_data['role']})")
 
@@ -77,9 +77,9 @@ def main():
     try:
         seed_roles(db)
         seed_users(db)
-        print("\n✅ Seed complete!")
+        print("\n[OK] Seed complete!")
     except Exception as e:
-        print(f"❌ Error: {e}")
+        print(f"[ERROR] Error: {e}")
         db.rollback()
     finally:
         db.close()

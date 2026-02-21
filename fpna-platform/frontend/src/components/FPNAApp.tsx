@@ -7,7 +7,6 @@ import {
   TrendingUp, 
   DollarSign, 
   Users, 
-  Calendar,
   ChevronRight,
   ChevronDown,
   ChevronUp,
@@ -24,11 +23,24 @@ import {
   Database,
   Plug,
   ArrowRight,
-  Settings2,
   RefreshCw,
-  Play
+  Play,
+  Globe,
+  FileText,
+  Table,
+  Layers,
+  Banknote,
+  Calculator,
+  LayoutTemplate,
+  Settings
 } from 'lucide-react';
-import { budgetAPI, authAPI, approvalsAPI, connectionsAPI, etlAPI } from '../services/api';
+import { budgetAPI, authAPI, approvalsAPI, connectionsAPI, etlAPI, budgetUploadAPI } from '../services/api';
+import { COAPage, CurrenciesPage, DriversPage, TemplatesPage, SnapshotsPage } from './FPNAModules';
+import { DWHIntegrationPage } from './DWHIntegration';
+import { DataIntegrationPage } from './DataIntegration';
+import { VarianceReportPage } from './VarianceReport';
+import BudgetPlanning from './BudgetPlanning';
+import type { ColumnMapping, ColumnMappingSuggestion, HeaderValues } from '../services/api';
 import LoginPage from './LoginPage';
 import AppHeader from './AppHeader';
 
@@ -111,7 +123,7 @@ const FPNAApp = () => {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [uploadedFile, setUploadedFile] = useState<File | null>(null);
-  const [uploadProgress, setUploadProgress] = useState(false);
+  const [_uploadProgress, _setUploadProgress] = useState(false);
 
   useEffect(() => {
     const token = localStorage.getItem('access_token');
@@ -253,10 +265,10 @@ const FPNAApp = () => {
     }
   };
 
-  const handleUpload = async () => {
+  // Legacy upload function - kept for potential backward compatibility
+  void (async function _handleUpload() {
     if (!uploadedFile) return;
-
-    setUploadProgress(true);
+    _setUploadProgress(true);
     setError(null);
     try {
       const uploadedBy = user?.username || 'unknown';
@@ -265,13 +277,13 @@ const FPNAApp = () => {
       setUploadedFile(null);
       setCurrentPage('dashboard');
       await fetchBudgets();
-    } catch (err: any) {
-      setError(err.response?.data?.detail || 'Failed to upload budget');
-      console.error('Error uploading:', err);
+    } catch (err: unknown) {
+      const axiosErr = err as { response?: { data?: { detail?: string } } };
+      setError(axiosErr.response?.data?.detail || 'Failed to upload budget');
     } finally {
-      setUploadProgress(false);
+      _setUploadProgress(false);
     }
-  };
+  });
 
   const handleDownloadTemplate = async () => {
     try {
@@ -325,160 +337,315 @@ const FPNAApp = () => {
     }
   };
 
-  // Dashboard Page
+  // Dashboard Page - Updated to show Budget Planning workflow data
   const Dashboard = () => {
-    const stats = {
-      total: budgets.length,
-      totalAmount: budgets.reduce((sum, b) => sum + Number(b.total_amount), 0),
-      pending: budgets.filter(b => b.status.includes('PENDING')).length,
-      approved: budgets.filter(b => b.status === 'APPROVED').length,
+    const [workflowStatus, setWorkflowStatus] = useState<any>(null);
+    const [plannedBudgets, setPlannedBudgets] = useState<any>(null);
+    const [dashboardLoading, setDashboardLoading] = useState(true);
+    const [fiscalYear] = useState(2026);
+
+    const formatAmount = (num: number): string => {
+      if (num === null || num === undefined) return '-';
+      if (Math.abs(num) >= 1e12) return (num / 1e12).toFixed(2) + 'T';
+      if (Math.abs(num) >= 1e9) return (num / 1e9).toFixed(2) + 'B';
+      if (Math.abs(num) >= 1e6) return (num / 1e6).toFixed(2) + 'M';
+      if (Math.abs(num) >= 1e3) return (num / 1e3).toFixed(1) + 'K';
+      return num.toLocaleString();
     };
+
+    useEffect(() => {
+      const loadDashboardData = async () => {
+        setDashboardLoading(true);
+        try {
+          const { baselineAPI } = await import('../services/api');
+          const [status, planned] = await Promise.all([
+            baselineAPI.getWorkflowStatus(fiscalYear),
+            baselineAPI.listPlanned({ fiscal_year: fiscalYear, limit: 20 })
+          ]);
+          setWorkflowStatus(status);
+          setPlannedBudgets(planned);
+        } catch (err) {
+          console.error('Failed to load dashboard data:', err);
+        } finally {
+          setDashboardLoading(false);
+        }
+      };
+      loadDashboardData();
+    }, [fiscalYear]);
+
+    const steps = workflowStatus?.steps || {};
+    const byStatus = steps['3_plan']?.by_status || {};
 
     return (
       <div className="space-y-6">
         <div className="flex justify-between items-center">
-          <h1 className="text-3xl font-bold text-gray-900">Dashboard</h1>
-          <button 
-            onClick={() => setCurrentPage('upload')}
-            className="bg-primary-600 hover:bg-primary-700 text-white px-4 py-2 rounded-lg flex items-center gap-2"
-          >
-            <Upload className="w-4 h-4" />
-            Upload Budget
-          </button>
+          <div>
+            <h1 className="text-3xl font-bold text-gray-900">FP&A Dashboard</h1>
+            <p className="text-gray-500 mt-1">Budget Planning Overview - FY {fiscalYear}</p>
+          </div>
+          <div className="flex gap-2">
+            <button 
+              onClick={() => setCurrentPage('budget-planning')}
+              className="bg-primary-600 hover:bg-primary-700 text-white px-4 py-2 rounded-lg flex items-center gap-2"
+            >
+              <Calculator className="w-4 h-4" />
+              Budget Planning
+            </button>
+            <button 
+              onClick={() => setCurrentPage('data-integration')}
+              className="bg-gray-100 hover:bg-gray-200 text-gray-700 px-4 py-2 rounded-lg flex items-center gap-2"
+            >
+              <Database className="w-4 h-4" />
+              Data Integration
+            </button>
+          </div>
         </div>
 
         {error && <ErrorMessage message={error} />}
 
-        {/* Stats Cards */}
-        <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
-          <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-sm text-gray-600">Total Budgets</p>
-                <p className="text-2xl font-bold text-gray-900 mt-1">{stats.total}</p>
-              </div>
-              <div className="bg-blue-100 p-3 rounded-lg">
-                <FileSpreadsheet className="w-6 h-6 text-blue-600" />
+        {dashboardLoading ? (
+          <LoadingSpinner />
+        ) : (
+          <>
+            {/* Workflow Progress */}
+            <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
+              <h2 className="text-lg font-semibold text-gray-900 mb-4">Budget Planning Pipeline</h2>
+              <div className="flex items-center justify-between">
+                {/* Step 1 */}
+                <div className="flex-1 text-center">
+                  <div className={`w-14 h-14 mx-auto rounded-full flex items-center justify-center ${
+                    steps['1_ingest']?.status === 'COMPLETED' ? 'bg-green-100 text-green-600' : 'bg-gray-100 text-gray-400'
+                  }`}>
+                    <Database className="w-7 h-7" />
+                  </div>
+                  <p className="mt-2 font-medium text-gray-900 text-sm">DWH Import</p>
+                  <p className="text-xs text-gray-500">{steps['1_ingest']?.records || 0} records</p>
+                </div>
+                <ChevronRight className="w-6 h-6 text-gray-300" />
+                {/* Step 2 */}
+                <div className="flex-1 text-center">
+                  <div className={`w-14 h-14 mx-auto rounded-full flex items-center justify-center ${
+                    steps['2_calculate']?.status === 'COMPLETED' ? 'bg-green-100 text-green-600' : 'bg-gray-100 text-gray-400'
+                  }`}>
+                    <Calculator className="w-7 h-7" />
+                  </div>
+                  <p className="mt-2 font-medium text-gray-900 text-sm">Baselines</p>
+                  <p className="text-xs text-gray-500">{steps['2_calculate']?.baselines || 0} accounts</p>
+                </div>
+                <ChevronRight className="w-6 h-6 text-gray-300" />
+                {/* Step 3 */}
+                <div className="flex-1 text-center">
+                  <div className={`w-14 h-14 mx-auto rounded-full flex items-center justify-center ${
+                    steps['3_plan']?.status === 'COMPLETED' ? 'bg-green-100 text-green-600' : 'bg-gray-100 text-gray-400'
+                  }`}>
+                    <FileSpreadsheet className="w-7 h-7" />
+                  </div>
+                  <p className="mt-2 font-medium text-gray-900 text-sm">Planned</p>
+                  <p className="text-xs text-gray-500">
+                    {Object.values(byStatus).reduce((a: number, b: any) => a + (b?.count || 0), 0)} budgets
+                  </p>
+                </div>
+                <ChevronRight className="w-6 h-6 text-gray-300" />
+                {/* Step 4 */}
+                <div className="flex-1 text-center">
+                  <div className={`w-14 h-14 mx-auto rounded-full flex items-center justify-center ${
+                    steps['4_export']?.status === 'COMPLETED' ? 'bg-green-100 text-green-600' : 'bg-gray-100 text-gray-400'
+                  }`}>
+                    <Upload className="w-7 h-7" />
+                  </div>
+                  <p className="mt-2 font-medium text-gray-900 text-sm">Exported</p>
+                  <p className="text-xs text-gray-500">{steps['4_export']?.exported || 0} to DWH</p>
+                </div>
               </div>
             </div>
-          </div>
 
-          <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-sm text-gray-600">Total Amount</p>
-                <p className="text-2xl font-bold text-gray-900 mt-1">
-                  ${(stats.totalAmount / 1000000).toFixed(2)}M
-                </p>
+            {/* Stats Cards */}
+            <div className="grid grid-cols-1 md:grid-cols-5 gap-4">
+              <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-5">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <p className="text-sm text-gray-600">Draft</p>
+                    <p className="text-2xl font-bold text-gray-900 mt-1">{byStatus.DRAFT?.count || 0}</p>
+                  </div>
+                  <div className="bg-gray-100 p-3 rounded-lg">
+                    <FileSpreadsheet className="w-5 h-5 text-gray-600" />
+                  </div>
+                </div>
               </div>
-              <div className="bg-green-100 p-3 rounded-lg">
-                <DollarSign className="w-6 h-6 text-green-600" />
-              </div>
-            </div>
-          </div>
 
-          <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-sm text-gray-600">Pending Approval</p>
-                <p className="text-2xl font-bold text-gray-900 mt-1">{stats.pending}</p>
+              <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-5">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <p className="text-sm text-gray-600">Submitted</p>
+                    <p className="text-2xl font-bold text-blue-600 mt-1">{byStatus.SUBMITTED?.count || 0}</p>
+                  </div>
+                  <div className="bg-blue-100 p-3 rounded-lg">
+                    <Clock className="w-5 h-5 text-blue-600" />
+                  </div>
+                </div>
               </div>
-              <div className="bg-yellow-100 p-3 rounded-lg">
-                <Clock className="w-6 h-6 text-yellow-600" />
-              </div>
-            </div>
-          </div>
 
-          <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-sm text-gray-600">Approved</p>
-                <p className="text-2xl font-bold text-gray-900 mt-1">{stats.approved}</p>
+              <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-5">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <p className="text-sm text-gray-600">Approved</p>
+                    <p className="text-2xl font-bold text-green-600 mt-1">{byStatus.APPROVED?.count || 0}</p>
+                  </div>
+                  <div className="bg-green-100 p-3 rounded-lg">
+                    <Check className="w-5 h-5 text-green-600" />
+                  </div>
+                </div>
               </div>
-              <div className="bg-green-100 p-3 rounded-lg">
-                <Check className="w-6 h-6 text-green-600" />
-              </div>
-            </div>
-          </div>
-        </div>
 
-        {/* Recent Budgets Table */}
-        <div className="bg-white rounded-xl shadow-sm border border-gray-200">
-          <div className="p-6 border-b border-gray-200 flex justify-between items-center">
-            <h2 className="text-xl font-semibold text-gray-900">All Budgets</h2>
-            <button 
-              onClick={fetchBudgets}
-              className="text-primary-600 hover:text-primary-700 text-sm font-medium"
-            >
-              Refresh
-            </button>
-          </div>
-          
-          {loading ? (
-            <LoadingSpinner />
-          ) : budgets.length === 0 ? (
-            <div className="p-12 text-center text-gray-500">
-              <FileSpreadsheet className="w-12 h-12 mx-auto mb-3 text-gray-400" />
-              <p>No budgets found. Upload your first budget!</p>
+              <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-5">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <p className="text-sm text-gray-600">Exported</p>
+                    <p className="text-2xl font-bold text-purple-600 mt-1">{byStatus.EXPORTED?.count || 0}</p>
+                  </div>
+                  <div className="bg-purple-100 p-3 rounded-lg">
+                    <Upload className="w-5 h-5 text-purple-600" />
+                  </div>
+                </div>
+              </div>
+
+              <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-5">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <p className="text-sm text-gray-600">Total Amount</p>
+                    <p className="text-xl font-bold text-gray-900 mt-1">
+                      {formatAmount(Object.values(byStatus).reduce((a: number, b: any) => a + (b?.amount || 0), 0))}
+                    </p>
+                  </div>
+                  <div className="bg-indigo-100 p-3 rounded-lg">
+                    <DollarSign className="w-5 h-5 text-indigo-600" />
+                  </div>
+                </div>
+              </div>
             </div>
-          ) : (
-            <div className="overflow-x-auto">
-              <table className="w-full">
-                <thead className="bg-gray-50">
-                  <tr>
-                    <th className="px-6 py-3 text-left text-xs font-semibold text-gray-700 uppercase">Budget Code</th>
-                    <th className="px-6 py-3 text-left text-xs font-semibold text-gray-700 uppercase">Fiscal Year</th>
-                    <th className="px-6 py-3 text-left text-xs font-semibold text-gray-700 uppercase">Department</th>
-                    <th className="px-6 py-3 text-left text-xs font-semibold text-gray-700 uppercase">Branch</th>
-                    <th className="px-6 py-3 text-left text-xs font-semibold text-gray-700 uppercase">Amount</th>
-                    <th className="px-6 py-3 text-left text-xs font-semibold text-gray-700 uppercase">Status</th>
-                    <th className="px-6 py-3 text-left text-xs font-semibold text-gray-700 uppercase">Actions</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-gray-100">
-                  {budgets.map((budget) => (
-                    <tr key={budget.id} className="hover:bg-gray-50">
-                      <td className="px-6 py-4 text-sm font-medium text-gray-900">{budget.budget_code}</td>
-                      <td className="px-6 py-4 text-sm text-gray-600">{budget.fiscal_year}</td>
-                      <td className="px-6 py-4 text-sm text-gray-600">{budget.department || '-'}</td>
-                      <td className="px-6 py-4 text-sm text-gray-600">{budget.branch || '-'}</td>
-                      <td className="px-6 py-4 text-sm font-semibold text-gray-900">
-                        ${Number(budget.total_amount).toLocaleString()}
-                      </td>
-                      <td className="px-6 py-4 text-sm">
-                        <StatusBadge status={budget.status} />
-                      </td>
-                      <td className="px-6 py-4 text-sm space-x-2">
-                        <button 
-                          onClick={() => fetchBudgetDetails(budget.id)}
-                          className="text-primary-600 hover:text-primary-700 font-medium"
-                        >
-                          View
-                        </button>
-                        {(budget.status === 'DRAFT' || budget.status === 'REJECTED') && (
-                          <>
-                            <button 
-                              onClick={() => handleSubmitBudget(budget.id)}
-                              className="text-green-600 hover:text-green-700 font-medium"
-                            >
-                              {budget.status === 'REJECTED' ? 'Resubmit' : 'Submit'}
-                            </button>
-                            <button 
-                              onClick={() => handleDeleteBudget(budget.id)}
-                              className="text-red-600 hover:text-red-700 font-medium"
-                            >
-                              Delete
-                            </button>
-                          </>
-                        )}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+
+            {/* Planned Budgets Table */}
+            <div className="bg-white rounded-xl shadow-sm border border-gray-200">
+              <div className="p-6 border-b border-gray-200 flex justify-between items-center">
+                <h2 className="text-xl font-semibold text-gray-900">Planned Budgets - FY {fiscalYear}</h2>
+                <button 
+                  onClick={() => setCurrentPage('budget-planning')}
+                  className="text-primary-600 hover:text-primary-700 text-sm font-medium flex items-center gap-1"
+                >
+                  View All <ChevronRight className="w-4 h-4" />
+                </button>
+              </div>
+              
+              {!plannedBudgets?.data?.length ? (
+                <div className="p-12 text-center text-gray-500">
+                  <Calculator className="w-12 h-12 mx-auto mb-3 text-gray-400" />
+                  <p>No planned budgets yet.</p>
+                  <button 
+                    onClick={() => setCurrentPage('budget-planning')}
+                    className="mt-4 text-primary-600 hover:text-primary-700 font-medium"
+                  >
+                    Start Budget Planning →
+                  </button>
+                </div>
+              ) : (
+                <div className="overflow-x-auto">
+                  <table className="w-full">
+                    <thead className="bg-gray-50">
+                      <tr>
+                        <th className="px-6 py-3 text-left text-xs font-semibold text-gray-700 uppercase">Account</th>
+                        <th className="px-6 py-3 text-right text-xs font-semibold text-gray-700 uppercase">Baseline</th>
+                        <th className="px-6 py-3 text-right text-xs font-semibold text-gray-700 uppercase">Planned</th>
+                        <th className="px-6 py-3 text-right text-xs font-semibold text-gray-700 uppercase">Variance</th>
+                        <th className="px-6 py-3 text-center text-xs font-semibold text-gray-700 uppercase">Status</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-gray-100">
+                      {plannedBudgets.data.slice(0, 10).map((budget: any) => (
+                        <tr key={budget.id} className="hover:bg-gray-50">
+                          <td className="px-6 py-4 text-sm font-mono text-gray-900">{budget.account_code}</td>
+                          <td className="px-6 py-4 text-sm text-right text-gray-600">
+                            {formatAmount(budget.baseline_amount)}
+                          </td>
+                          <td className="px-6 py-4 text-sm text-right font-semibold text-gray-900">
+                            {formatAmount(budget.annual_total)}
+                          </td>
+                          <td className="px-6 py-4 text-sm text-right">
+                            <span className={budget.variance_from_baseline >= 0 ? 'text-green-600' : 'text-red-600'}>
+                              {budget.variance_pct >= 0 ? '+' : ''}{budget.variance_pct?.toFixed(1)}%
+                            </span>
+                          </td>
+                          <td className="px-6 py-4 text-center">
+                            <StatusBadge status={budget.status} />
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
             </div>
-          )}
-        </div>
+
+            {/* Quick Actions */}
+            <div className="grid grid-cols-4 gap-4">
+              <button 
+                onClick={() => setCurrentPage('data-integration')}
+                className="bg-white rounded-xl shadow-sm border border-gray-200 p-4 hover:bg-gray-50 transition-colors text-left"
+              >
+                <div className="flex items-center gap-3">
+                  <div className="p-2 bg-blue-100 rounded-lg">
+                    <Download className="w-5 h-5 text-blue-600" />
+                  </div>
+                  <div>
+                    <p className="font-medium text-gray-900">Import Data</p>
+                    <p className="text-sm text-gray-500">From DWH</p>
+                  </div>
+                </div>
+              </button>
+              <button 
+                onClick={() => setCurrentPage('budget-planning')}
+                className="bg-white rounded-xl shadow-sm border border-gray-200 p-4 hover:bg-gray-50 transition-colors text-left"
+              >
+                <div className="flex items-center gap-3">
+                  <div className="p-2 bg-green-100 rounded-lg">
+                    <Calculator className="w-5 h-5 text-green-600" />
+                  </div>
+                  <div>
+                    <p className="font-medium text-gray-900">Plan Budgets</p>
+                    <p className="text-sm text-gray-500">Apply drivers</p>
+                  </div>
+                </div>
+              </button>
+              <button 
+                onClick={() => setCurrentPage('approvals')}
+                className="bg-white rounded-xl shadow-sm border border-gray-200 p-4 hover:bg-gray-50 transition-colors text-left"
+              >
+                <div className="flex items-center gap-3">
+                  <div className="p-2 bg-yellow-100 rounded-lg">
+                    <Users className="w-5 h-5 text-yellow-600" />
+                  </div>
+                  <div>
+                    <p className="font-medium text-gray-900">Approvals</p>
+                    <p className="text-sm text-gray-500">Review & approve</p>
+                  </div>
+                </div>
+              </button>
+              <button 
+                onClick={() => setCurrentPage('variance-report')}
+                className="bg-white rounded-xl shadow-sm border border-gray-200 p-4 hover:bg-gray-50 transition-colors text-left"
+              >
+                <div className="flex items-center gap-3">
+                  <div className="p-2 bg-purple-100 rounded-lg">
+                    <TrendingUp className="w-5 h-5 text-purple-600" />
+                  </div>
+                  <div>
+                    <p className="font-medium text-gray-900">Variance Report</p>
+                    <p className="text-sm text-gray-500">Plan vs Fact</p>
+                  </div>
+                </div>
+              </button>
+            </div>
+          </>
+        )}
       </div>
     );
   };
@@ -612,8 +779,8 @@ const FPNAApp = () => {
       setHeaderEdit({
         department: selectedBudget.department ?? '',
         branch: selectedBudget.branch ?? '',
-        description: (selectedBudget as Record<string, unknown>).description ?? '',
-        notes: (selectedBudget as Record<string, unknown>).notes ?? '',
+        description: ((selectedBudget as unknown) as Record<string, unknown>).description as string ?? '',
+        notes: ((selectedBudget as unknown) as Record<string, unknown>).notes as string ?? '',
       });
       setEditingHeader(true);
     };
@@ -1921,11 +2088,11 @@ const FPNAApp = () => {
               <div className="md:col-span-2 font-medium text-gray-700">Source</div>
               <div><label className="block text-sm text-gray-600 mb-1">Type</label><select className="w-full border rounded px-3 py-2" value={form.source_type} onChange={(e) => setForm((f) => ({ ...f, source_type: e.target.value, source_connection_id: null }))}><option value="dwh_connection">DWH Connection</option><option value="fpna_app">FPNA App DB</option></select></div>
               <div>{form.source_type === 'dwh_connection' && (<><label className="block text-sm text-gray-600 mb-1">Connection</label><select className="w-full border rounded px-3 py-2" value={form.source_connection_id ?? ''} onChange={(e) => setForm((f) => ({ ...f, source_connection_id: e.target.value ? Number(e.target.value) : null }))}><option value="">— Select —</option>{connections.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}</select></>)}</div>
-              <div><label className="block text-sm text-gray-600 mb-1">Table</label><select className="w-full border rounded px-3 py-2" value={form.source_schema ? `${form.source_schema}.${form.source_table}` : form.source_table} onChange={(e) => { const v = e.target.value; const p = parseTable(v); setForm((f) => ({ ...f, source_table: p.table, source_schema: p.schema || undefined })); }}><option value="">— Select —</option>{sourceTables.map((t) => <option key={t.full_name} value={t.full_name}>{t.full_name}</option>)}</select></div>
+              <div><label className="block text-sm text-gray-600 mb-1">Table</label><select className="w-full border rounded px-3 py-2" value={form.source_schema ? `${form.source_schema}.${form.source_table}` : form.source_table} onChange={(e) => { const v = e.target.value; const p = parseTable(v); setForm((f) => ({ ...f, source_table: p.table, source_schema: p.schema || '' })); }}><option value="">— Select —</option>{sourceTables.map((t) => <option key={t.full_name} value={t.full_name}>{t.full_name}</option>)}</select></div>
               <div className="md:col-span-2 font-medium text-gray-700 mt-4">Target</div>
               <div><label className="block text-sm text-gray-600 mb-1">Type</label><select className="w-full border rounded px-3 py-2" value={form.target_type} onChange={(e) => setForm((f) => ({ ...f, target_type: e.target.value, target_connection_id: null }))}><option value="fpna_app">FPNA App DB</option><option value="dwh_connection">DWH Connection</option></select></div>
               <div>{form.target_type === 'dwh_connection' && (<><label className="block text-sm text-gray-600 mb-1">Connection</label><select className="w-full border rounded px-3 py-2" value={form.target_connection_id ?? ''} onChange={(e) => setForm((f) => ({ ...f, target_connection_id: e.target.value ? Number(e.target.value) : null }))}><option value="">— Select —</option>{connections.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}</select></>)}</div>
-              <div><label className="block text-sm text-gray-600 mb-1">Table</label><select className="w-full border rounded px-3 py-2" value={form.target_schema ? `${form.target_schema}.${form.target_table}` : form.target_table} onChange={(e) => { const v = e.target.value; const p = parseTable(v); setForm((f) => ({ ...f, target_table: p.table, target_schema: p.schema || undefined })); }}><option value="">— Select —</option>{targetTables.map((t) => <option key={t.full_name} value={t.full_name}>{t.full_name}</option>)}</select><input className="w-full border rounded px-3 py-2 mt-1" placeholder="Or type new table name" value={form.target_table && !targetTables.some((t) => t.full_name === form.target_table) ? form.target_table : ''} onChange={(e) => setForm((f) => ({ ...f, target_table: e.target.value, target_schema: '' }))} /></div>
+              <div><label className="block text-sm text-gray-600 mb-1">Table</label><select className="w-full border rounded px-3 py-2" value={form.target_schema ? `${form.target_schema}.${form.target_table}` : form.target_table} onChange={(e) => { const v = e.target.value; const p = parseTable(v); setForm((f) => ({ ...f, target_table: p.table, target_schema: p.schema || '' })); }}><option value="">— Select —</option>{targetTables.map((t) => <option key={t.full_name} value={t.full_name}>{t.full_name}</option>)}</select><input className="w-full border rounded px-3 py-2 mt-1" placeholder="Or type new table name" value={form.target_table && !targetTables.some((t) => t.full_name === form.target_table) ? form.target_table : ''} onChange={(e) => setForm((f) => ({ ...f, target_table: e.target.value, target_schema: '' }))} /></div>
               <div><label className="block text-sm text-gray-600 mb-1">Create target if missing</label><input type="checkbox" checked={form.create_target_if_missing} onChange={(e) => setForm((f) => ({ ...f, create_target_if_missing: e.target.checked }))} /></div>
               <div><label className="block text-sm text-gray-600 mb-1">Load mode</label><select className="w-full border rounded px-3 py-2" value={form.load_mode} onChange={(e) => setForm((f) => ({ ...f, load_mode: e.target.value }))}><option value="full_replace">Full replace (truncate + insert)</option><option value="append">Append only</option></select></div>
             </div>
@@ -2068,238 +2235,582 @@ const FPNAApp = () => {
     );
   };
 
-  // Excel Upload Page
-  const ExcelUpload = () => {
+  // Universal Upload Page - supports multiple data sources
+  const UniversalUpload = () => {
+    type SourceType = 'excel' | 'csv' | 'sql_server' | 'postgresql' | 'api';
+    type WizardStep = 'source' | 'configure' | 'mapping' | 'import';
+    
+    const [step, setStep] = useState<WizardStep>('source');
+    const [sourceType, setSourceType] = useState<SourceType | null>(null);
     const [dragActive, setDragActive] = useState(false);
+    const [previewData, setPreviewData] = useState<{ columns: { name: string; type: string }[]; data: Record<string, unknown>[]; row_count: number } | null>(null);
+    const [suggestedMappings, setSuggestedMappings] = useState<ColumnMappingSuggestion[]>([]);
+    const [columnMappings, setColumnMappings] = useState<ColumnMapping[]>([]);
+    const [headerValues, setHeaderValues] = useState<HeaderValues>({ fiscal_year: new Date().getFullYear(), department: '', branch: '', currency: 'USD', description: '' });
+    const [validationResult, setValidationResult] = useState<{ valid: boolean; errors: string[]; warnings: string[] } | null>(null);
+    const [connections, setConnections] = useState<{ id: number; name: string; db_type: string }[]>([]);
+    const [tables, setTables] = useState<{ schema_name: string; table_name: string; full_name: string }[]>([]);
+    const [dbConfig, setDbConfig] = useState<{ connection_id: number | null; schema_name: string; table_name: string; where_clause: string }>({ connection_id: null, schema_name: '', table_name: '', where_clause: '' });
+    const [apiConfig, setApiConfig] = useState<{ url: string; method: string; auth_type: string; auth_credentials: Record<string, string>; data_path: string; headers: Record<string, string> }>({ url: '', method: 'GET', auth_type: 'none', auth_credentials: {}, data_path: '', headers: {} });
+    const [targetSchema, setTargetSchema] = useState<{ name: string; type: string; required: boolean; description: string }[]>([]);
+    const [isLoading, setIsLoading] = useState(false);
+    const [importResult, setImportResult] = useState<{ success: boolean; message: string; budget_id?: number; budget_code?: string } | null>(null);
+
+    useEffect(() => {
+      budgetUploadAPI.getTargetSchema().then(schema => {
+        setTargetSchema(schema.line_item_fields);
+      }).catch(() => {});
+      connectionsAPI.list().then(setConnections).catch(() => {});
+    }, []);
+
+    useEffect(() => {
+      if (dbConfig.connection_id) {
+        connectionsAPI.getTables(dbConfig.connection_id).then(setTables).catch(() => setTables([]));
+      }
+    }, [dbConfig.connection_id]);
 
     const handleDrag = (e: React.DragEvent) => {
       e.preventDefault();
       e.stopPropagation();
-      if (e.type === "dragenter" || e.type === "dragover") {
-        setDragActive(true);
-      } else if (e.type === "dragleave") {
-        setDragActive(false);
-      }
+      setDragActive(e.type === "dragenter" || e.type === "dragover");
     };
 
     const handleDrop = (e: React.DragEvent) => {
       e.preventDefault();
       e.stopPropagation();
       setDragActive(false);
-      
-      if (e.dataTransfer.files && e.dataTransfer.files[0]) {
-        setUploadedFile(e.dataTransfer.files[0]);
+      if (e.dataTransfer.files?.[0]) setUploadedFile(e.dataTransfer.files[0]);
+    };
+
+    const handlePreview = async () => {
+      setIsLoading(true);
+      setError(null);
+      try {
+        let result;
+        if (sourceType === 'excel' || sourceType === 'csv') {
+          if (!uploadedFile) throw new Error('Please select a file');
+          result = await budgetUploadAPI.previewFile(uploadedFile, sourceType, { rows: 10 });
+        } else if (sourceType === 'sql_server' || sourceType === 'postgresql') {
+          if (!dbConfig.connection_id || !dbConfig.table_name) throw new Error('Please select connection and table');
+          result = await budgetUploadAPI.previewDatabase(sourceType, { connection_id: dbConfig.connection_id, schema_name: dbConfig.schema_name || undefined, table_name: dbConfig.table_name, where_clause: dbConfig.where_clause || undefined }, 10);
+        } else if (sourceType === 'api') {
+          if (!apiConfig.url) throw new Error('Please enter API URL');
+          result = await budgetUploadAPI.previewAPI({ url: apiConfig.url, method: apiConfig.method, auth_type: apiConfig.auth_type as 'none' | 'basic' | 'bearer' | 'api_key', auth_credentials: apiConfig.auth_credentials, data_path: apiConfig.data_path || undefined, headers: Object.keys(apiConfig.headers).length ? apiConfig.headers : undefined }, 10);
+        }
+        if (result?.success) {
+          setPreviewData({ columns: result.columns, data: result.data, row_count: result.row_count });
+          setSuggestedMappings(result.suggested_mappings || []);
+          const initialMappings = (result.suggested_mappings || []).filter(s => s.suggested_target).map(s => ({ source_column: s.source_column, target_field: s.suggested_target! }));
+          setColumnMappings(initialMappings);
+          setStep('mapping');
+        } else {
+          throw new Error(result?.message || 'Preview failed');
+        }
+      } catch (err: unknown) {
+        setError(err instanceof Error ? err.message : 'Preview failed');
+      } finally {
+        setIsLoading(false);
       }
     };
 
+    const handleValidateMapping = async () => {
+      if (!previewData) return;
+      try {
+        const result = await budgetUploadAPI.validateMapping(previewData.columns.map(c => c.name), columnMappings, 'line_items');
+        setValidationResult(result);
+      } catch {
+        setValidationResult({ valid: false, errors: ['Validation failed'], warnings: [] });
+      }
+    };
+
+    const handleImport = async () => {
+      setIsLoading(true);
+      setError(null);
+      try {
+        let result;
+        if (sourceType === 'excel' || sourceType === 'csv') {
+          if (!uploadedFile) throw new Error('No file selected');
+          result = await budgetUploadAPI.importFromFile(uploadedFile, sourceType, columnMappings, headerValues, user?.username);
+        } else if (sourceType === 'sql_server' || sourceType === 'postgresql') {
+          result = await budgetUploadAPI.importFromDatabase(sourceType, { connection_id: dbConfig.connection_id!, schema_name: dbConfig.schema_name || undefined, table_name: dbConfig.table_name, where_clause: dbConfig.where_clause || undefined }, columnMappings, headerValues, user?.username);
+        } else if (sourceType === 'api') {
+          result = await budgetUploadAPI.importFromAPI({ url: apiConfig.url, method: apiConfig.method, auth_type: apiConfig.auth_type as 'none' | 'basic' | 'bearer' | 'api_key', auth_credentials: apiConfig.auth_credentials, data_path: apiConfig.data_path || undefined }, columnMappings, headerValues, user?.username);
+        }
+        if (result?.success) {
+          setImportResult(result);
+          setStep('import');
+          fetchBudgets();
+        } else {
+          throw new Error(result?.message || 'Import failed');
+        }
+      } catch (err: unknown) {
+        setError(err instanceof Error ? err.message : 'Import failed');
+      } finally {
+        setIsLoading(false);
+      }
+    };
+
+    const resetWizard = () => {
+      setStep('source');
+      setSourceType(null);
+      setUploadedFile(null);
+      setPreviewData(null);
+      setSuggestedMappings([]);
+      setColumnMappings([]);
+      setValidationResult(null);
+      setImportResult(null);
+      setDbConfig({ connection_id: null, schema_name: '', table_name: '', where_clause: '' });
+      setApiConfig({ url: '', method: 'GET', auth_type: 'none', auth_credentials: {}, data_path: '', headers: {} });
+    };
+
+    const sourceOptions = [
+      { type: 'excel' as SourceType, icon: FileSpreadsheet, label: 'Excel', desc: '.xlsx, .xls files' },
+      { type: 'csv' as SourceType, icon: FileText, label: 'CSV', desc: 'Comma-separated values' },
+      { type: 'sql_server' as SourceType, icon: Database, label: 'SQL Server', desc: 'Microsoft SQL Server' },
+      { type: 'postgresql' as SourceType, icon: Database, label: 'PostgreSQL', desc: 'PostgreSQL database' },
+      { type: 'api' as SourceType, icon: Globe, label: 'REST API', desc: 'External API endpoint' },
+    ];
+
     return (
       <div className="space-y-6">
-        <h1 className="text-3xl font-bold text-gray-900">Upload Budget</h1>
+        <div className="flex items-center justify-between">
+          <h1 className="text-3xl font-bold text-gray-900">Upload Budget</h1>
+          {step !== 'source' && (
+            <button onClick={resetWizard} className="text-sm text-gray-600 hover:text-gray-900 flex items-center gap-1">
+              <X className="w-4 h-4" /> Start Over
+            </button>
+          )}
+        </div>
+
+        {/* Progress Steps */}
+        <div className="flex items-center gap-2 text-sm">
+          {['source', 'configure', 'mapping', 'import'].map((s, i) => (
+            <React.Fragment key={s}>
+              <div className={`flex items-center gap-2 px-3 py-1.5 rounded-full ${step === s ? 'bg-primary-100 text-primary-700 font-medium' : s === 'import' && importResult?.success ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-500'}`}>
+                <span className="w-5 h-5 rounded-full bg-current bg-opacity-20 flex items-center justify-center text-xs">{i + 1}</span>
+                {s === 'source' ? 'Source' : s === 'configure' ? 'Configure' : s === 'mapping' ? 'Map Columns' : 'Import'}
+              </div>
+              {i < 3 && <ChevronRight className="w-4 h-4 text-gray-300" />}
+            </React.Fragment>
+          ))}
+        </div>
 
         {error && <ErrorMessage message={error} />}
 
-        {/* Upload Area */}
-        <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
-          <div
-            className={`border-2 border-dashed rounded-xl p-12 text-center transition-colors ${
-              dragActive ? 'border-primary-500 bg-primary-50' : 'border-gray-300'
-            }`}
-            onDragEnter={handleDrag}
-            onDragLeave={handleDrag}
-            onDragOver={handleDrag}
-            onDrop={handleDrop}
-          >
-            <Upload className="w-16 h-16 text-gray-400 mx-auto mb-4" />
-            <h3 className="text-lg font-semibold text-gray-900 mb-2">
-              Drop your Excel file here
-            </h3>
-            <p className="text-gray-600 mb-4">or click to browse</p>
-            <input
-              type="file"
-              accept=".xlsx,.xls"
-              className="hidden"
-              id="file-upload"
-              onChange={(e) => setUploadedFile(e.target.files?.[0] || null)}
-            />
-            <label
-              htmlFor="file-upload"
-              className="inline-block px-6 py-3 bg-primary-600 text-white rounded-lg cursor-pointer hover:bg-primary-700"
-            >
-              Choose File
-            </label>
-            <p className="text-sm text-gray-500 mt-4">
-              Supported formats: .xlsx, .xls (Max 10MB)
-            </p>
+        {/* Step 1: Select Source */}
+        {step === 'source' && (
+          <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
+            <h2 className="text-lg font-semibold mb-4">Select Data Source</h2>
+            <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
+              {sourceOptions.map(opt => (
+                <button key={opt.type} onClick={() => { setSourceType(opt.type); setStep('configure'); }} className={`p-4 border-2 rounded-xl text-center hover:border-primary-500 hover:bg-primary-50 transition-colors ${sourceType === opt.type ? 'border-primary-500 bg-primary-50' : 'border-gray-200'}`}>
+                  <opt.icon className="w-8 h-8 mx-auto mb-2 text-gray-600" />
+                  <p className="font-medium text-gray-900">{opt.label}</p>
+                  <p className="text-xs text-gray-500 mt-1">{opt.desc}</p>
+                </button>
+              ))}
+            </div>
           </div>
+        )}
 
-          {uploadedFile && (
-            <div className="mt-6 p-4 bg-green-50 border border-green-200 rounded-lg flex items-center justify-between">
-              <div className="flex items-center gap-3">
-                <FileSpreadsheet className="w-5 h-5 text-green-600" />
+        {/* Step 2: Configure Source */}
+        {step === 'configure' && sourceType && (
+          <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
+            <h2 className="text-lg font-semibold mb-4">Configure {sourceOptions.find(o => o.type === sourceType)?.label} Source</h2>
+            
+            {(sourceType === 'excel' || sourceType === 'csv') && (
+              <div className="space-y-4">
+                <div className={`border-2 border-dashed rounded-xl p-8 text-center transition-colors ${dragActive ? 'border-primary-500 bg-primary-50' : 'border-gray-300'}`} onDragEnter={handleDrag} onDragLeave={handleDrag} onDragOver={handleDrag} onDrop={handleDrop}>
+                  <Upload className="w-12 h-12 text-gray-400 mx-auto mb-3" />
+                  <p className="text-gray-600 mb-3">Drop your {sourceType.toUpperCase()} file here or</p>
+                  <input type="file" accept={sourceType === 'excel' ? '.xlsx,.xls' : '.csv'} className="hidden" id="file-upload-universal" onChange={(e) => setUploadedFile(e.target.files?.[0] || null)} />
+                  <label htmlFor="file-upload-universal" className="inline-block px-4 py-2 bg-primary-600 text-white rounded-lg cursor-pointer hover:bg-primary-700">Choose File</label>
+                </div>
+                {uploadedFile && (
+                  <div className="p-3 bg-green-50 border border-green-200 rounded-lg flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <FileSpreadsheet className="w-5 h-5 text-green-600" />
+                      <span className="font-medium">{uploadedFile.name}</span>
+                      <span className="text-sm text-gray-500">({(uploadedFile.size / 1024).toFixed(1)} KB)</span>
+                    </div>
+                    <button onClick={() => setUploadedFile(null)} className="text-red-600 hover:text-red-700"><X className="w-4 h-4" /></button>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {(sourceType === 'sql_server' || sourceType === 'postgresql') && (
+              <div className="space-y-4">
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">Connection</label>
+                    <select value={dbConfig.connection_id || ''} onChange={(e) => setDbConfig({ ...dbConfig, connection_id: Number(e.target.value) || null, table_name: '' })} className="w-full border rounded-lg px-3 py-2">
+                      <option value="">Select connection...</option>
+                      {connections.filter(c => c.db_type === sourceType).map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">Table</label>
+                    <select value={dbConfig.table_name} onChange={(e) => { const t = tables.find(t => t.full_name === e.target.value); setDbConfig({ ...dbConfig, table_name: t?.table_name || '', schema_name: t?.schema_name || '' }); }} className="w-full border rounded-lg px-3 py-2" disabled={!dbConfig.connection_id}>
+                      <option value="">Select table...</option>
+                      {tables.map(t => <option key={t.full_name} value={t.full_name}>{t.full_name}</option>)}
+                    </select>
+                  </div>
+                </div>
                 <div>
-                  <p className="font-medium text-gray-900">{uploadedFile.name}</p>
-                  <p className="text-sm text-gray-600">{(uploadedFile.size / 1024).toFixed(2)} KB</p>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">WHERE Clause (optional)</label>
+                  <input type="text" value={dbConfig.where_clause} onChange={(e) => setDbConfig({ ...dbConfig, where_clause: e.target.value })} placeholder="e.g., fiscal_year = 2025" className="w-full border rounded-lg px-3 py-2" />
                 </div>
               </div>
-              <button
-                onClick={() => setUploadedFile(null)}
-                className="text-red-600 hover:text-red-700"
-                disabled={uploadProgress}
-              >
-                <X className="w-5 h-5" />
-              </button>
-            </div>
-          )}
+            )}
 
-          {uploadedFile && (
-            <div className="mt-6 flex gap-3">
-              <button 
-                onClick={handleUpload}
-                disabled={uploadProgress}
-                className="flex-1 px-6 py-3 bg-primary-600 text-white rounded-lg hover:bg-primary-700 font-semibold disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
-              >
-                {uploadProgress ? (
-                  <>
-                    <Loader2 className="w-5 h-5 animate-spin" />
-                    Uploading...
-                  </>
-                ) : (
-                  <>
-                    <Upload className="w-5 h-5" />
-                    Upload Budget
-                  </>
+            {sourceType === 'api' && (
+              <div className="space-y-4">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">API URL</label>
+                  <input type="text" value={apiConfig.url} onChange={(e) => setApiConfig({ ...apiConfig, url: e.target.value })} placeholder="https://api.example.com/data" className="w-full border rounded-lg px-3 py-2" />
+                </div>
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">Method</label>
+                    <select value={apiConfig.method} onChange={(e) => setApiConfig({ ...apiConfig, method: e.target.value })} className="w-full border rounded-lg px-3 py-2">
+                      <option value="GET">GET</option>
+                      <option value="POST">POST</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">Auth Type</label>
+                    <select value={apiConfig.auth_type} onChange={(e) => setApiConfig({ ...apiConfig, auth_type: e.target.value })} className="w-full border rounded-lg px-3 py-2">
+                      <option value="none">None</option>
+                      <option value="basic">Basic Auth</option>
+                      <option value="bearer">Bearer Token</option>
+                      <option value="api_key">API Key</option>
+                    </select>
+                  </div>
+                </div>
+                {apiConfig.auth_type === 'basic' && (
+                  <div className="grid grid-cols-2 gap-4">
+                    <input type="text" placeholder="Username" value={apiConfig.auth_credentials.username || ''} onChange={(e) => setApiConfig({ ...apiConfig, auth_credentials: { ...apiConfig.auth_credentials, username: e.target.value } })} className="border rounded-lg px-3 py-2" />
+                    <input type="password" placeholder="Password" value={apiConfig.auth_credentials.password || ''} onChange={(e) => setApiConfig({ ...apiConfig, auth_credentials: { ...apiConfig.auth_credentials, password: e.target.value } })} className="border rounded-lg px-3 py-2" />
+                  </div>
                 )}
-              </button>
-              <button 
-                onClick={() => setUploadedFile(null)}
-                disabled={uploadProgress}
-                className="px-6 py-3 border border-gray-300 rounded-lg hover:bg-gray-50 disabled:opacity-50"
-              >
-                Cancel
-              </button>
-            </div>
-          )}
-        </div>
+                {apiConfig.auth_type === 'bearer' && (
+                  <input type="text" placeholder="Bearer Token" value={apiConfig.auth_credentials.token || ''} onChange={(e) => setApiConfig({ ...apiConfig, auth_credentials: { token: e.target.value } })} className="w-full border rounded-lg px-3 py-2" />
+                )}
+                {apiConfig.auth_type === 'api_key' && (
+                  <div className="grid grid-cols-2 gap-4">
+                    <input type="text" placeholder="API Key" value={apiConfig.auth_credentials.key || ''} onChange={(e) => setApiConfig({ ...apiConfig, auth_credentials: { ...apiConfig.auth_credentials, key: e.target.value } })} className="border rounded-lg px-3 py-2" />
+                    <input type="text" placeholder="Header Name (e.g., X-API-Key)" value={apiConfig.auth_credentials.header_name || ''} onChange={(e) => setApiConfig({ ...apiConfig, auth_credentials: { ...apiConfig.auth_credentials, header_name: e.target.value } })} className="border rounded-lg px-3 py-2" />
+                  </div>
+                )}
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Data Path (optional)</label>
+                  <input type="text" value={apiConfig.data_path} onChange={(e) => setApiConfig({ ...apiConfig, data_path: e.target.value })} placeholder="e.g., data.items or results" className="w-full border rounded-lg px-3 py-2" />
+                </div>
+              </div>
+            )}
 
-        {/* Template Download */}
-        <div className="bg-blue-50 border border-blue-200 rounded-xl p-6">
-          <div className="flex items-start gap-4">
-            <div className="bg-blue-100 p-3 rounded-lg">
-              <Download className="w-6 h-6 text-blue-600" />
-            </div>
-            <div className="flex-1">
-              <h3 className="text-lg font-semibold text-gray-900 mb-2">
-                Need a template?
-              </h3>
-              <p className="text-gray-600 mb-4">
-                Download our Excel template to ensure your data is in the correct format.
-              </p>
-              <button 
-                onClick={handleDownloadTemplate}
-                className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700"
-              >
-                Download Template
+            <div className="flex gap-3 mt-6">
+              <button onClick={() => setStep('source')} className="px-4 py-2 border border-gray-300 rounded-lg hover:bg-gray-50">Back</button>
+              <button onClick={handlePreview} disabled={isLoading || ((sourceType === 'excel' || sourceType === 'csv') && !uploadedFile) || ((sourceType === 'sql_server' || sourceType === 'postgresql') && !dbConfig.table_name) || (sourceType === 'api' && !apiConfig.url)} className="flex-1 px-4 py-2 bg-primary-600 text-white rounded-lg hover:bg-primary-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2">
+                {isLoading ? <><Loader2 className="w-4 h-4 animate-spin" /> Loading...</> : <><Table className="w-4 h-4" /> Preview Data</>}
               </button>
             </div>
           </div>
-        </div>
+        )}
+
+        {/* Step 3: Column Mapping */}
+        {step === 'mapping' && previewData && (
+          <div className="space-y-6">
+            <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
+              <h2 className="text-lg font-semibold mb-4">Map Columns to Budget Fields</h2>
+              <p className="text-sm text-gray-600 mb-4">Map your source columns to the required budget fields. Required fields are marked with *.</p>
+              
+              <div className="grid grid-cols-2 gap-6">
+                <div>
+                  <h3 className="font-medium text-gray-700 mb-3">Column Mapping</h3>
+                  <div className="space-y-2 max-h-80 overflow-y-auto">
+                    {previewData.columns.map(col => {
+                      const mapping = columnMappings.find(m => m.source_column === col.name);
+                      const suggestion = suggestedMappings.find(s => s.source_column === col.name);
+                      return (
+                        <div key={col.name} className="flex items-center gap-2 p-2 bg-gray-50 rounded-lg">
+                          <div className="flex-1">
+                            <p className="text-sm font-medium">{col.name}</p>
+                            <p className="text-xs text-gray-500">{col.type}</p>
+                          </div>
+                          <ArrowRight className="w-4 h-4 text-gray-400" />
+                          <select value={mapping?.target_field || ''} onChange={(e) => { const newMappings = columnMappings.filter(m => m.source_column !== col.name); if (e.target.value) newMappings.push({ source_column: col.name, target_field: e.target.value }); setColumnMappings(newMappings); setValidationResult(null); }} className={`w-40 text-sm border rounded px-2 py-1 ${suggestion?.required && !mapping ? 'border-red-300 bg-red-50' : ''}`}>
+                            <option value="">-- Skip --</option>
+                            {targetSchema.map(f => <option key={f.name} value={f.name}>{f.name}{f.required ? ' *' : ''}</option>)}
+                          </select>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                <div>
+                  <h3 className="font-medium text-gray-700 mb-3">Budget Header</h3>
+                  <div className="space-y-3">
+                    <div>
+                      <label className="block text-sm text-gray-600 mb-1">Fiscal Year *</label>
+                      <input type="number" value={headerValues.fiscal_year} onChange={(e) => setHeaderValues({ ...headerValues, fiscal_year: Number(e.target.value) })} className="w-full border rounded-lg px-3 py-2" />
+                    </div>
+                    <div>
+                      <label className="block text-sm text-gray-600 mb-1">Department</label>
+                      <input type="text" value={headerValues.department || ''} onChange={(e) => setHeaderValues({ ...headerValues, department: e.target.value })} className="w-full border rounded-lg px-3 py-2" />
+                    </div>
+                    <div>
+                      <label className="block text-sm text-gray-600 mb-1">Branch</label>
+                      <input type="text" value={headerValues.branch || ''} onChange={(e) => setHeaderValues({ ...headerValues, branch: e.target.value })} className="w-full border rounded-lg px-3 py-2" />
+                    </div>
+                    <div>
+                      <label className="block text-sm text-gray-600 mb-1">Currency</label>
+                      <input type="text" value={headerValues.currency || 'USD'} onChange={(e) => setHeaderValues({ ...headerValues, currency: e.target.value })} className="w-full border rounded-lg px-3 py-2" />
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {validationResult && (
+                <div className={`mt-4 p-3 rounded-lg ${validationResult.valid ? 'bg-green-50 border border-green-200' : 'bg-red-50 border border-red-200'}`}>
+                  {validationResult.valid ? (
+                    <p className="text-green-700 flex items-center gap-2"><Check className="w-4 h-4" /> Mapping is valid. Ready to import.</p>
+                  ) : (
+                    <div>
+                      <p className="text-red-700 font-medium">Validation Errors:</p>
+                      <ul className="text-sm text-red-600 mt-1 list-disc list-inside">{validationResult.errors.map((e, i) => <li key={i}>{e}</li>)}</ul>
+                    </div>
+                  )}
+                  {validationResult.warnings.length > 0 && (
+                    <div className="mt-2">
+                      <p className="text-yellow-700 text-sm">Warnings:</p>
+                      <ul className="text-sm text-yellow-600 list-disc list-inside">{validationResult.warnings.map((w, i) => <li key={i}>{w}</li>)}</ul>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              <div className="flex gap-3 mt-6">
+                <button onClick={() => setStep('configure')} className="px-4 py-2 border border-gray-300 rounded-lg hover:bg-gray-50">Back</button>
+                <button onClick={handleValidateMapping} className="px-4 py-2 border border-primary-300 text-primary-700 rounded-lg hover:bg-primary-50">Validate Mapping</button>
+                <button onClick={handleImport} disabled={isLoading || !validationResult?.valid} className="flex-1 px-4 py-2 bg-primary-600 text-white rounded-lg hover:bg-primary-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2">
+                  {isLoading ? <><Loader2 className="w-4 h-4 animate-spin" /> Importing...</> : <><Upload className="w-4 h-4" /> Import Budget</>}
+                </button>
+              </div>
+            </div>
+
+            {/* Data Preview */}
+            <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
+              <h3 className="font-medium text-gray-700 mb-3">Data Preview ({previewData.row_count} rows shown)</h3>
+              <div className="overflow-x-auto">
+                <table className="min-w-full text-sm">
+                  <thead className="bg-gray-50">
+                    <tr>{previewData.columns.map(col => <th key={col.name} className="px-3 py-2 text-left font-medium text-gray-600">{col.name}</th>)}</tr>
+                  </thead>
+                  <tbody className="divide-y divide-gray-100">
+                    {previewData.data.slice(0, 5).map((row, i) => (
+                      <tr key={i}>{previewData.columns.map(col => <td key={col.name} className="px-3 py-2 text-gray-700">{String(row[col.name] ?? '')}</td>)}</tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Step 4: Import Result */}
+        {step === 'import' && importResult && (
+          <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-8 text-center">
+            {importResult.success ? (
+              <>
+                <div className="w-16 h-16 bg-green-100 rounded-full flex items-center justify-center mx-auto mb-4">
+                  <Check className="w-8 h-8 text-green-600" />
+                </div>
+                <h2 className="text-2xl font-bold text-gray-900 mb-2">Import Successful!</h2>
+                <p className="text-gray-600 mb-4">{importResult.message}</p>
+                <p className="text-sm text-gray-500 mb-6">Budget Code: <span className="font-mono font-medium">{importResult.budget_code}</span></p>
+                <div className="flex gap-3 justify-center">
+                  <button onClick={resetWizard} className="px-4 py-2 border border-gray-300 rounded-lg hover:bg-gray-50">Upload Another</button>
+                  <button onClick={async () => { try { const budget = await budgetAPI.get(importResult.budget_id!); setSelectedBudget(budget); setCurrentPage('details'); } catch { setCurrentPage('dashboard'); } }} className="px-4 py-2 bg-primary-600 text-white rounded-lg hover:bg-primary-700">View Budget</button>
+                </div>
+              </>
+            ) : (
+              <>
+                <div className="w-16 h-16 bg-red-100 rounded-full flex items-center justify-center mx-auto mb-4">
+                  <X className="w-8 h-8 text-red-600" />
+                </div>
+                <h2 className="text-2xl font-bold text-gray-900 mb-2">Import Failed</h2>
+                <p className="text-red-600 mb-6">{importResult.message}</p>
+                <button onClick={() => setStep('mapping')} className="px-4 py-2 bg-primary-600 text-white rounded-lg hover:bg-primary-700">Try Again</button>
+              </>
+            )}
+          </div>
+        )}
+
+        {/* Template Download */}
+        {step === 'source' && (
+          <div className="bg-blue-50 border border-blue-200 rounded-xl p-6">
+            <div className="flex items-start gap-4">
+              <div className="bg-blue-100 p-3 rounded-lg">
+                <Download className="w-6 h-6 text-blue-600" />
+              </div>
+              <div className="flex-1">
+                <h3 className="text-lg font-semibold text-gray-900 mb-2">Need an Excel template?</h3>
+                <p className="text-gray-600 mb-4">Download our Excel template to ensure your data is in the correct format for quick upload.</p>
+                <button onClick={handleDownloadTemplate} className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700">Download Template</button>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     );
   };
 
+  // Collapsible Navigation State
+  const [expandedSections, setExpandedSections] = useState<Set<string>>(new Set(['budgeting', 'fpna']));
+
+  const toggleSection = (section: string) => {
+    const newExpanded = new Set(expandedSections);
+    if (newExpanded.has(section)) {
+      newExpanded.delete(section);
+    } else {
+      newExpanded.add(section);
+    }
+    setExpandedSections(newExpanded);
+  };
+
+  // Navigation Item Component
+  const NavItem = ({ page, icon: Icon, label, indent = false }: { page: string; icon: React.ElementType; label: string; indent?: boolean }) => (
+    <button
+      onClick={() => {
+        setCurrentPage(page);
+        if (page === 'data-entry') {
+          setSelectedBudget(null);
+          setError(null);
+        }
+      }}
+      className={`w-full flex items-center gap-3 px-4 py-2.5 rounded-lg transition-all duration-200 ${
+        indent ? 'pl-10' : ''
+      } ${
+        currentPage === page
+          ? 'bg-primary-100 text-primary-700 font-medium shadow-sm'
+          : 'text-gray-600 hover:bg-gray-100 hover:text-gray-900'
+      }`}
+    >
+      <Icon className={`w-5 h-5 ${currentPage === page ? 'text-primary-600' : 'text-gray-400'}`} />
+      <span className="text-sm">{label}</span>
+    </button>
+  );
+
+  // Section Header Component
+  const SectionHeader = ({ id, icon: Icon, label, expanded }: { id: string; icon: React.ElementType; label: string; expanded: boolean }) => (
+    <button
+      onClick={() => toggleSection(id)}
+      className="w-full flex items-center justify-between px-4 py-3 text-gray-700 hover:bg-gray-50 rounded-lg transition-colors"
+    >
+      <div className="flex items-center gap-3">
+        <Icon className="w-5 h-5 text-gray-500" />
+        <span className="font-semibold text-sm">{label}</span>
+      </div>
+      <ChevronDown className={`w-4 h-4 text-gray-400 transition-transform duration-200 ${expanded ? 'rotate-180' : ''}`} />
+    </button>
+  );
+
   // Sidebar
   const Sidebar = () => (
-    <div className="w-64 bg-white border-r border-gray-200 h-screen flex flex-col">
-      <div className="p-6 border-b border-gray-200">
-        <h1 className="text-2xl font-bold text-primary-600">FPNA</h1>
-        <p className="text-sm text-gray-600 mt-1">Financial Planning Platform</p>
+    <div className="w-72 bg-white border-r border-gray-200 h-full flex flex-col shadow-sm">
+      {/* Logo Section */}
+      <div className="p-5 border-b border-gray-100">
+        <div className="flex items-center gap-3">
+          <div className="w-10 h-10 bg-gradient-to-br from-primary-500 to-primary-700 rounded-xl flex items-center justify-center shadow-lg">
+            <TrendingUp className="w-6 h-6 text-white" />
+          </div>
+          <div>
+            <h1 className="text-xl font-bold text-gray-900">FP&A Platform</h1>
+            <p className="text-xs text-gray-500">Financial Planning & Analysis</p>
+          </div>
+        </div>
       </div>
 
-      <nav className="flex-1 p-4 space-y-1">
-        <button
-          onClick={() => setCurrentPage('dashboard')}
-          className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg transition-colors ${
-            currentPage === 'dashboard'
-              ? 'bg-primary-50 text-primary-700'
-              : 'text-gray-700 hover:bg-gray-50'
-          }`}
-        >
-          <TrendingUp className="w-5 h-5" />
-          <span className="font-medium">Dashboard</span>
-        </button>
+      {/* Navigation */}
+      <nav className="flex-1 overflow-y-auto p-3 space-y-1">
+        {/* Dashboard - Always visible */}
+        <NavItem page="dashboard" icon={TrendingUp} label="Dashboard" />
+        
+        {/* Budgeting Section */}
+        <div className="pt-2">
+          <SectionHeader id="budgeting" icon={FileSpreadsheet} label="Budget Management" expanded={expandedSections.has('budgeting')} />
+          {expandedSections.has('budgeting') && (
+            <div className="mt-1 space-y-0.5">
+              <NavItem page="data-entry" icon={FileSpreadsheet} label="Budget Entry" indent />
+              <NavItem page="upload" icon={Upload} label="Import Data" indent />
+              <NavItem page="approvals" icon={Users} label="Approvals" indent />
+              <NavItem page="analytics" icon={BarChart2} label="Analytics" indent />
+              <NavItem page="variance-report" icon={TrendingUp} label="Plan vs Fact" indent />
+            </div>
+          )}
+        </div>
 
-        <button
-          onClick={() => setCurrentPage('upload')}
-          className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg transition-colors ${
-            currentPage === 'upload'
-              ? 'bg-primary-50 text-primary-700'
-              : 'text-gray-700 hover:bg-gray-50'
-          }`}
-        >
-          <Upload className="w-5 h-5" />
-          <span className="font-medium">Upload Budget</span>
-        </button>
+        {/* FP&A Core Section */}
+        <div className="pt-2">
+          <SectionHeader id="fpna" icon={Layers} label="FP&A Core" expanded={expandedSections.has('fpna')} />
+          {expandedSections.has('fpna') && (
+            <div className="mt-1 space-y-0.5">
+              <NavItem page="budget-planning" icon={Calculator} label="Budget Planning" indent />
+              <NavItem page="coa" icon={Layers} label="Chart of Accounts" indent />
+              <NavItem page="currencies" icon={Banknote} label="Currencies & FX" indent />
+              <NavItem page="drivers" icon={Calculator} label="Drivers & Rules" indent />
+              <NavItem page="templates" icon={LayoutTemplate} label="Budget Templates" indent />
+              <NavItem page="snapshots" icon={Database} label="Baselines" indent />
+            </div>
+          )}
+        </div>
 
-        <button
-          onClick={() => { setCurrentPage('data-entry'); setSelectedBudget(null); setError(null); }}
-          className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg transition-colors ${
-            currentPage === 'data-entry' ? 'bg-primary-50 text-primary-700' : 'text-gray-700 hover:bg-gray-50'
-          }`}
-        >
-          <FileSpreadsheet className="w-5 h-5" />
-          <span className="font-medium">Data Entry</span>
-        </button>
+        {/* Data Integration Section */}
+        <div className="pt-2">
+          <SectionHeader id="integration" icon={RefreshCw} label="Data Integration" expanded={expandedSections.has('integration')} />
+          {expandedSections.has('integration') && (
+            <div className="mt-1 space-y-0.5">
+              <NavItem page="data-integration" icon={Database} label="Integration Hub" indent />
+              <NavItem page="dwh-integration" icon={Database} label="DWH Legacy" indent />
+              <NavItem page="etl" icon={RefreshCw} label="ETL Jobs" indent />
+            </div>
+          )}
+        </div>
 
-        <button
-          onClick={() => setCurrentPage('approvals')}
-          className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg transition-colors ${
-            currentPage === 'approvals' ? 'bg-primary-50 text-primary-700' : 'text-gray-700 hover:bg-gray-50'
-          }`}
-        >
-          <Users className="w-5 h-5" />
-          <span className="font-medium">Approvals</span>
-        </button>
-
-        <button
-          onClick={() => setCurrentPage('analytics')}
-          className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg transition-colors ${
-            currentPage === 'analytics' ? 'bg-primary-50 text-primary-700' : 'text-gray-700 hover:bg-gray-50'
-          }`}
-        >
-          <BarChart2 className="w-5 h-5" />
-          <span className="font-medium">Analytics</span>
-        </button>
-        <button
-          onClick={() => setCurrentPage('connections')}
-          className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg transition-colors ${
-            currentPage === 'connections' ? 'bg-primary-50 text-primary-700' : 'text-gray-700 hover:bg-gray-50'
-          }`}
-        >
-          <Database className="w-5 h-5" />
-          <span className="font-medium">Manage Connections</span>
-        </button>
-        <button
-          onClick={() => setCurrentPage('etl')}
-          className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg transition-colors ${
-            currentPage === 'etl' ? 'bg-primary-50 text-primary-700' : 'text-gray-700 hover:bg-gray-50'
-          }`}
-        >
-          <RefreshCw className="w-5 h-5" />
-          <span className="font-medium">ETL</span>
-        </button>
+        {/* Settings Section */}
+        <div className="pt-2">
+          <SectionHeader id="settings" icon={Settings} label="Administration" expanded={expandedSections.has('settings')} />
+          {expandedSections.has('settings') && (
+            <div className="mt-1 space-y-0.5">
+              <NavItem page="users" icon={Users} label="User Management" indent />
+              <NavItem page="settings" icon={Settings} label="System Settings" indent />
+            </div>
+          )}
+        </div>
       </nav>
 
-      <div className="p-4 border-t border-gray-200">
+      {/* User Profile Section */}
+      <div className="p-4 border-t border-gray-100 bg-gray-50">
         <div className="flex items-center gap-3">
-          <div className="w-10 h-10 bg-primary-100 rounded-full flex items-center justify-center">
-            <span className="text-primary-700 font-semibold text-sm">
+          <div className="w-10 h-10 bg-gradient-to-br from-primary-400 to-primary-600 rounded-full flex items-center justify-center shadow">
+            <span className="text-white font-semibold text-sm">
               {(user?.full_name || user?.username || 'U').slice(0, 2).toUpperCase()}
             </span>
           </div>
-          <div>
+          <div className="flex-1 min-w-0">
             <p className="text-sm font-medium text-gray-900 truncate">{user?.full_name || user?.username}</p>
-            <p className="text-xs text-gray-600">{(user?.roles || []).join(', ') || 'User'}</p>
+            <p className="text-xs text-gray-500 truncate">{(user?.roles || []).join(', ') || 'User'}</p>
           </div>
+          <button
+            onClick={handleLogout}
+            className="p-2 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors"
+            title="Logout"
+          >
+            <X className="w-4 h-4" />
+          </button>
         </div>
       </div>
     </div>
@@ -2342,11 +2853,56 @@ const FPNAApp = () => {
               />
             )
           )}
-          {currentPage === 'upload' && <ExcelUpload />}
+          {currentPage === 'upload' && <UniversalUpload />}
           {currentPage === 'approvals' && <ApprovalsPage />}
           {currentPage === 'analytics' && <AnalyticsPage />}
+          {currentPage === 'variance-report' && <VarianceReportPage />}
           {currentPage === 'connections' && <ManageConnectionsPage />}
           {currentPage === 'etl' && <ETLPage />}
+          {currentPage === 'data-integration' && <DataIntegrationPage />}
+          {currentPage === 'dwh-integration' && <DWHIntegrationPage />}
+          {currentPage === 'coa' && <COAPage />}
+          {currentPage === 'currencies' && <CurrenciesPage />}
+          {currentPage === 'drivers' && <DriversPage />}
+          {currentPage === 'templates' && <TemplatesPage />}
+          {currentPage === 'snapshots' && <SnapshotsPage />}
+          {currentPage === 'budget-planning' && <BudgetPlanning />}
+          {currentPage === 'users' && (
+            <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-8">
+              <div className="flex items-center gap-4 mb-6">
+                <div className="w-12 h-12 bg-primary-100 rounded-xl flex items-center justify-center">
+                  <Users className="w-6 h-6 text-primary-600" />
+                </div>
+                <div>
+                  <h1 className="text-2xl font-bold text-gray-900">User Management</h1>
+                  <p className="text-gray-600">Manage users, roles, and permissions</p>
+                </div>
+              </div>
+              <div className="text-center py-12 text-gray-500">
+                <Users className="w-16 h-16 mx-auto mb-4 text-gray-300" />
+                <p className="text-lg font-medium">User management module</p>
+                <p className="text-sm mt-2">Configure user access and role assignments</p>
+              </div>
+            </div>
+          )}
+          {currentPage === 'settings' && (
+            <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-8">
+              <div className="flex items-center gap-4 mb-6">
+                <div className="w-12 h-12 bg-primary-100 rounded-xl flex items-center justify-center">
+                  <Settings className="w-6 h-6 text-primary-600" />
+                </div>
+                <div>
+                  <h1 className="text-2xl font-bold text-gray-900">System Settings</h1>
+                  <p className="text-gray-600">Configure platform settings and preferences</p>
+                </div>
+              </div>
+              <div className="text-center py-12 text-gray-500">
+                <Settings className="w-16 h-16 mx-auto mb-4 text-gray-300" />
+                <p className="text-lg font-medium">System configuration</p>
+                <p className="text-sm mt-2">Manage application settings and integrations</p>
+              </div>
+            </div>
+          )}
           </div>
         </div>
       </div>
