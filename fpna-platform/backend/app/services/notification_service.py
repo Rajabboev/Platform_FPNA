@@ -96,3 +96,151 @@ def notify_managers_uploaded(budget: Budget, uploaded_by_username: str, db: Sess
             message=msg,
         ))
     db.commit()
+
+
+def notify_template_assigned(
+    recipient_id: int,
+    template_name: str,
+    fiscal_year: int,
+    deadline: str | None,
+    assigned_by: str,
+    db: Session
+) -> None:
+    """Notify user that a budget template has been assigned to them."""
+    deadline_str = f" Deadline: {deadline}." if deadline else ""
+    msg = f"You have been assigned the '{template_name}' budget template for fiscal year {fiscal_year}.{deadline_str} Please complete your budget entries."
+    db.add(Notification(
+        recipient_id=recipient_id,
+        type="TEMPLATE_ASSIGNED",
+        message=msg,
+        actor_username=assigned_by,
+    ))
+    db.commit()
+
+
+def notify_department_users_template_assigned(
+    department_id: int,
+    template_name: str,
+    fiscal_year: int,
+    deadline: str | None,
+    assigned_by: str,
+    db: Session
+) -> None:
+    """Notify all users in a department that a template has been assigned."""
+    from app.models.department import Department
+    
+    dept = db.query(Department).filter(Department.id == department_id).first()
+    if not dept or not dept.manager_user_id:
+        return
+    
+    deadline_str = f" Deadline: {deadline}." if deadline else ""
+    msg = f"Department '{dept.name_en}' has been assigned the '{template_name}' budget template for fiscal year {fiscal_year}.{deadline_str}"
+    
+    # Notify the department manager
+    db.add(Notification(
+        recipient_id=dept.manager_user_id,
+        type="TEMPLATE_ASSIGNED",
+        message=msg,
+        actor_username=assigned_by,
+    ))
+    db.commit()
+
+
+def notify_budget_plan_created(
+    department_id: int,
+    fiscal_year: int,
+    created_by: str,
+    db: Session
+) -> None:
+    """Notify department manager that a budget plan has been created for their department."""
+    from app.models.department import Department
+    
+    dept = db.query(Department).filter(Department.id == department_id).first()
+    if not dept or not dept.manager_user_id:
+        return
+    
+    msg = f"A budget plan for fiscal year {fiscal_year} has been created for your department '{dept.name_en}'. Please review and make adjustments."
+    
+    db.add(Notification(
+        recipient_id=dept.manager_user_id,
+        type="BUDGET_PLAN_CREATED",
+        message=msg,
+        actor_username=created_by,
+    ))
+    db.commit()
+
+
+def notify_budget_plan_submitted(
+    plan_id: int,
+    department_name: str,
+    fiscal_year: int,
+    submitted_by: str,
+    db: Session
+) -> None:
+    """Notify CFO/managers that a department has submitted their budget plan."""
+    perm = LEVEL_PERMISSION.get(1)  # L1 approvers
+    if not perm:
+        return
+    
+    managers = _get_users_with_permission(perm, db)
+    msg = f"Department '{department_name}' has submitted their budget plan for fiscal year {fiscal_year}. Please review and approve."
+    
+    for m in managers:
+        db.add(Notification(
+            recipient_id=m.id,
+            type="BUDGET_PLAN_SUBMITTED",
+            message=msg,
+            actor_username=submitted_by,
+        ))
+    db.commit()
+
+
+def notify_budget_plan_approved(
+    department_id: int,
+    fiscal_year: int,
+    approved_by: str,
+    approval_level: str,
+    db: Session
+) -> None:
+    """Notify department manager that their budget plan has been approved."""
+    from app.models.department import Department
+    
+    dept = db.query(Department).filter(Department.id == department_id).first()
+    if not dept or not dept.manager_user_id:
+        return
+    
+    msg = f"Your budget plan for fiscal year {fiscal_year} has been approved ({approval_level})."
+    
+    db.add(Notification(
+        recipient_id=dept.manager_user_id,
+        type="BUDGET_PLAN_APPROVED",
+        message=msg,
+        actor_username=approved_by,
+    ))
+    db.commit()
+
+
+def notify_budget_plan_rejected(
+    department_id: int,
+    fiscal_year: int,
+    rejected_by: str,
+    reason: str | None,
+    db: Session
+) -> None:
+    """Notify department manager that their budget plan has been rejected."""
+    from app.models.department import Department
+    
+    dept = db.query(Department).filter(Department.id == department_id).first()
+    if not dept or not dept.manager_user_id:
+        return
+    
+    reason_str = f" Reason: {reason}" if reason else ""
+    msg = f"Your budget plan for fiscal year {fiscal_year} has been rejected.{reason_str} Please revise and resubmit."
+    
+    db.add(Notification(
+        recipient_id=dept.manager_user_id,
+        type="BUDGET_PLAN_REJECTED",
+        message=msg,
+        actor_username=rejected_by,
+    ))
+    db.commit()

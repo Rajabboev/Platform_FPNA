@@ -7,7 +7,7 @@ const apiBase = (import.meta.env.VITE_API_BASE_URL as string)?.trim()
 
 const api = axios.create({
   baseURL: apiBase,
-  timeout: 15000,
+  timeout: 120000,  // 2 minutes for large data operations
   headers: {
     'Content-Type': 'application/json',
   },
@@ -742,6 +742,36 @@ export const driversAPI = {
     });
     return response.data;
   },
+
+  // Driver-Group Assignments
+  getDriversForGroup: async (groupId: number) => {
+    const response = await api.get(`/drivers/group-assignments/by-group/${groupId}`);
+    return response.data;
+  },
+  listGroupAssignments: async (params?: { budgeting_group_id?: number; driver_id?: number }) => {
+    const response = await api.get('/drivers/group-assignments', { params });
+    return response.data;
+  },
+  assignToGroup: async (driverId: number, budgetingGroupId: number, isDefault: boolean = false) => {
+    const response = await api.post('/drivers/group-assignments', null, {
+      params: { driver_id: driverId, budgeting_group_id: budgetingGroupId, is_default: isDefault }
+    });
+    return response.data;
+  },
+  bulkAssignToGroup: async (budgetingGroupId: number, driverIds: number[], defaultDriverId?: number) => {
+    const response = await api.post('/drivers/group-assignments/bulk', null, {
+      params: { budgeting_group_id: budgetingGroupId, driver_ids: driverIds, default_driver_id: defaultDriverId }
+    });
+    return response.data;
+  },
+  removeAssignment: async (assignmentId: number) => {
+    const response = await api.delete(`/drivers/group-assignments/${assignmentId}`);
+    return response.data;
+  },
+  setDefaultDriver: async (assignmentId: number) => {
+    const response = await api.patch(`/drivers/group-assignments/${assignmentId}/set-default`);
+    return response.data;
+  },
 };
 
 // Templates API
@@ -1157,6 +1187,157 @@ export const dwhIntegrationAPI = {
   },
 };
 
+// ============================================
+// Data Upload API (Balance Snapshots & Budget Planned)
+// ============================================
+export const dataUploadAPI = {
+  // Balance Snapshot Upload
+  uploadBalanceSnapshot: async (file: File) => {
+    const formData = new FormData();
+    formData.append('file', file);
+    const response = await api.post('/data-upload/balance-snapshot/upload', formData, {
+      headers: { 'Content-Type': 'multipart/form-data' }
+    });
+    return response.data;
+  },
+
+  downloadBalanceSnapshotTemplate: async () => {
+    const response = await api.get('/data-upload/balance-snapshot/template', {
+      responseType: 'blob'
+    });
+    return response.data;
+  },
+
+  listSnapshotImports: async (skip?: number, limit?: number) => {
+    const response = await api.get('/data-upload/balance-snapshot/imports', {
+      params: { skip, limit }
+    });
+    return response.data;
+  },
+
+  deleteSnapshotImport: async (batchId: string) => {
+    const response = await api.delete(`/data-upload/balance-snapshot/imports/${batchId}`);
+    return response.data;
+  },
+
+  // Budget Planned Upload
+  uploadBudgetPlanned: async (file: File, fiscalYear: number) => {
+    const formData = new FormData();
+    formData.append('file', file);
+    const response = await api.post('/data-upload/budget-planned/upload', formData, {
+      params: { fiscal_year: fiscalYear },
+      headers: { 'Content-Type': 'multipart/form-data' }
+    });
+    return response.data;
+  },
+
+  downloadBudgetPlannedTemplate: async (fiscalYear?: number) => {
+    const response = await api.get('/data-upload/budget-planned/template', {
+      params: { fiscal_year: fiscalYear },
+      responseType: 'blob'
+    });
+    return response.data;
+  },
+
+  listBudgetPlanned: async (params?: {
+    fiscal_year?: number;
+    status?: string;
+    department?: string;
+    account_code?: string;
+    scenario?: string;
+    skip?: number;
+    limit?: number;
+  }) => {
+    const response = await api.get('/data-upload/budget-planned/list', { params });
+    return response.data;
+  },
+
+  getBudgetPlanned: async (budgetId: number) => {
+    const response = await api.get(`/data-upload/budget-planned/${budgetId}`);
+    return response.data;
+  },
+
+  updateBudgetPlanned: async (budgetId: number, updates: Record<string, unknown>) => {
+    const response = await api.patch(`/data-upload/budget-planned/${budgetId}`, updates);
+    return response.data;
+  },
+
+  deleteBudgetPlanned: async (budgetId: number) => {
+    const response = await api.delete(`/data-upload/budget-planned/${budgetId}`);
+    return response.data;
+  },
+
+  submitBudgetPlanned: async (budgetId: number) => {
+    const response = await api.post(`/data-upload/budget-planned/${budgetId}/submit`);
+    return response.data;
+  },
+
+  bulkSubmitBudgetPlanned: async (budgetIds: number[]) => {
+    const response = await api.post('/data-upload/budget-planned/bulk-submit', { budget_ids: budgetIds });
+    return response.data;
+  },
+
+  // Upload Statistics
+  getUploadStats: async (fiscalYear?: number) => {
+    const response = await api.get('/data-upload/stats', { params: { fiscal_year: fiscalYear } });
+    return response.data;
+  },
+};
+
+// ============================================
+// Planned Budget Approvals API
+// ============================================
+export const plannedApprovalsAPI = {
+  listPending: async (params?: {
+    fiscal_year?: number;
+    department?: string;
+    account_code?: string;
+  }) => {
+    const response = await api.get('/planned-approvals/pending', { params });
+    return response.data;
+  },
+
+  getStats: async (fiscalYear?: number) => {
+    const response = await api.get('/planned-approvals/stats', { params: { fiscal_year: fiscalYear } });
+    return response.data;
+  },
+
+  approve: async (budgetId: number, comment?: string) => {
+    const response = await api.post(`/planned-approvals/${budgetId}/approve`, { comment });
+    return response.data;
+  },
+
+  reject: async (budgetId: number, comment?: string) => {
+    const response = await api.post(`/planned-approvals/${budgetId}/reject`, { comment });
+    return response.data;
+  },
+
+  submit: async (budgetId: number) => {
+    const response = await api.post(`/planned-approvals/${budgetId}/submit`);
+    return response.data;
+  },
+
+  bulkApprove: async (budgetIds: number[], comment?: string) => {
+    const response = await api.post('/planned-approvals/bulk-approve', { budget_ids: budgetIds, comment });
+    return response.data;
+  },
+
+  bulkReject: async (budgetIds: number[], comment: string) => {
+    const response = await api.post('/planned-approvals/bulk-reject', { budget_ids: budgetIds, comment });
+    return response.data;
+  },
+
+  bulkSubmit: async (budgetIds: number[]) => {
+    const response = await api.post('/planned-approvals/bulk-submit', { budget_ids: budgetIds });
+    return response.data;
+  },
+
+  getBudgetDetails: async (budgetId: number) => {
+    const response = await api.get(`/planned-approvals/${budgetId}`);
+    return response.data;
+  },
+};
+
 // Baseline & Budget Planning API
 export const baselineAPI = {
   // Step 1: Ingest from DWH
@@ -1273,6 +1454,300 @@ export const baselineAPI = {
   // Workflow Status
   getWorkflowStatus: async (fiscalYear: number) => {
     const response = await api.get(`/baseline/workflow-status/${fiscalYear}`);
+    return response.data;
+  },
+};
+
+// COA Dimension API
+export const coaDimensionAPI = {
+  // Import COA from Excel
+  importFromFile: async (file: File, sheetName: string = 'CBU_2', replaceExisting: boolean = true) => {
+    const formData = new FormData();
+    formData.append('file', file);
+    const response = await api.post('/coa-dimension/import', formData, {
+      params: { sheet_name: sheetName, replace_existing: replaceExisting },
+      headers: { 'Content-Type': 'multipart/form-data' },
+    });
+    return response.data;
+  },
+
+  // Import from uploads folder
+  importFromUploads: async (filename: string = 'COA_Dimension.xlsx', sheetName: string = 'CBU_2') => {
+    const response = await api.post('/coa-dimension/import-from-uploads', null, {
+      params: { filename, sheet_name: sheetName },
+    });
+    return response.data;
+  },
+
+  // Get COA hierarchy for tree view
+  getHierarchy: async () => {
+    const response = await api.get('/coa-dimension/hierarchy');
+    return response.data;
+  },
+
+  // List/search accounts
+  listAccounts: async (params?: {
+    query?: string;
+    bs_flag?: number;
+    budgeting_group?: number;
+    skip?: number;
+    limit?: number;
+  }) => {
+    const response = await api.get('/coa-dimension/accounts', { params });
+    return response.data;
+  },
+
+  // Get single account details
+  getAccount: async (coaCode: string) => {
+    const response = await api.get(`/coa-dimension/accounts/${coaCode}`);
+    return response.data;
+  },
+
+  // List budgeting groups
+  listBudgetingGroups: async (category?: string) => {
+    const response = await api.get('/coa-dimension/budgeting-groups', { params: { category } });
+    return response.data;
+  },
+
+  // Alias for getBudgetingGroups
+  getBudgetingGroups: async (category?: string) => {
+    const response = await api.get('/coa-dimension/budgeting-groups', { params: { category } });
+    return response.data;
+  },
+
+  // Get accounts by budgeting group
+  getAccountsByBudgetingGroup: async (groupId: number) => {
+    const response = await api.get(`/coa-dimension/budgeting-groups/${groupId}/accounts`);
+    return response.data;
+  },
+
+  // List BS classes
+  listBSClasses: async () => {
+    const response = await api.get('/coa-dimension/bs-classes');
+    return response.data;
+  },
+
+  // Get COA statistics
+  getStats: async () => {
+    const response = await api.get('/coa-dimension/stats');
+    return response.data;
+  },
+};
+
+// Department API
+export const departmentAPI = {
+  // List departments
+  list: async (includeInactive: boolean = false) => {
+    const response = await api.get('/departments/', { params: { include_inactive: includeInactive } });
+    return response.data;
+  },
+
+  // Create department
+  create: async (data: {
+    code: string;
+    name_en: string;
+    name_uz?: string;
+    name_ru?: string;
+    description?: string;
+    parent_id?: number;
+    head_user_id?: number;
+    is_baseline_only?: boolean;
+    display_order?: number;
+  }) => {
+    const response = await api.post('/departments/', data);
+    return response.data;
+  },
+
+  // Get department
+  get: async (deptId: number) => {
+    const response = await api.get(`/departments/${deptId}`);
+    return response.data;
+  },
+
+  // Update department
+  update: async (deptId: number, data: Partial<{
+    name_en: string;
+    name_uz: string;
+    name_ru: string;
+    description: string;
+    parent_id: number;
+    head_user_id: number;
+    is_active: boolean;
+    is_baseline_only: boolean;
+    display_order: number;
+  }>) => {
+    const response = await api.patch(`/departments/${deptId}`, data);
+    return response.data;
+  },
+
+  // Delete department
+  delete: async (deptId: number) => {
+    const response = await api.delete(`/departments/${deptId}`);
+    return response.data;
+  },
+
+  // List department users
+  listUsers: async (deptId: number) => {
+    const response = await api.get(`/departments/${deptId}/users`);
+    return response.data;
+  },
+
+  // Assign user to department
+  assignUser: async (deptId: number, userId: number, role: string = 'analyst') => {
+    const response = await api.post(`/departments/${deptId}/assign`, { user_id: userId, role });
+    return response.data;
+  },
+
+  // Remove user from department
+  removeUser: async (deptId: number, userId: number) => {
+    const response = await api.delete(`/departments/${deptId}/users/${userId}`);
+    return response.data;
+  },
+
+  // Assign budgeting groups
+  assignGroups: async (deptId: number, groupIds: number[]) => {
+    const response = await api.post(`/departments/${deptId}/assign-groups`, { budgeting_group_ids: groupIds });
+    return response.data;
+  },
+
+  // Get department groups
+  getGroups: async (deptId: number) => {
+    const response = await api.get(`/departments/${deptId}/groups`);
+    return response.data;
+  },
+};
+
+// Budget Planning API
+export const budgetPlanningAPI = {
+  // Initialize budget cycle
+  initialize: async (fiscalYear: number, data: {
+    connection_id: number;
+    source_table?: string;
+    source_years?: number[];
+    calculation_method?: string;
+  }) => {
+    const response = await api.post(`/budget-planning/initialize/${fiscalYear}`, data);
+    return response.data;
+  },
+
+  // Calculate baseline only (preview)
+  calculateBaseline: async (fiscalYear: number, params?: {
+    source_years?: number[];
+    method?: string;
+  }) => {
+    const response = await api.post(`/budget-planning/calculate-baseline/${fiscalYear}`, null, { params });
+    return response.data;
+  },
+
+  // Assign departments to groups
+  assignDepartments: async (assignments: Array<{ department_id: number; budgeting_group_ids: number[] }>) => {
+    const response = await api.post('/budget-planning/assign-departments', { assignments });
+    return response.data;
+  },
+
+  // Get department template
+  getDepartmentTemplate: async (deptId: number, fiscalYear: number) => {
+    const response = await api.get(`/budget-planning/department/${deptId}/template`, { params: { fiscal_year: fiscalYear } });
+    return response.data;
+  },
+
+  // Get group details (drill-down)
+  getGroupDetails: async (deptId: number, groupId: number) => {
+    const response = await api.get(`/budget-planning/department/${deptId}/group/${groupId}/details`);
+    return response.data;
+  },
+
+  // Update group adjustment
+  updateGroupAdjustment: async (deptId: number, groupId: number, data: {
+    driver_code?: string;
+    driver_name?: string;
+    driver_rate?: number;
+    monthly_adjustments?: Record<string, number>;
+    notes?: string;
+  }) => {
+    const response = await api.patch(`/budget-planning/department/${deptId}/group/${groupId}`, data);
+    return response.data;
+  },
+
+  // Submit plan
+  submitPlan: async (deptId: number, fiscalYear: number) => {
+    const response = await api.post(`/budget-planning/department/${deptId}/submit`, null, { params: { fiscal_year: fiscalYear } });
+    return response.data;
+  },
+
+  // Approve plan (dept head)
+  approvePlanDept: async (deptId: number, fiscalYear: number, comment?: string) => {
+    const response = await api.post(`/budget-planning/department/${deptId}/approve`, { comment }, { params: { fiscal_year: fiscalYear } });
+    return response.data;
+  },
+
+  // CFO approve all
+  cfoApproveAll: async (fiscalYear: number, comment?: string) => {
+    const response = await api.post(`/budget-planning/cfo-approve/${fiscalYear}`, { comment });
+    return response.data;
+  },
+
+  // Reject plan
+  rejectPlan: async (deptId: number, fiscalYear: number, reason: string, level: string = 'dept_head') => {
+    const response = await api.post(`/budget-planning/department/${deptId}/reject`, { reason }, { params: { fiscal_year: fiscalYear, level } });
+    return response.data;
+  },
+
+  // Export to DWH
+  exportToDWH: async (fiscalYear: number, connectionId: number, targetTable?: string) => {
+    const response = await api.post(`/budget-planning/export/${fiscalYear}`, {
+      connection_id: connectionId,
+      target_table: targetTable || 'fpna_budget_final',
+    });
+    return response.data;
+  },
+
+  // Get workflow status
+  getWorkflowStatus: async (fiscalYear: number) => {
+    const response = await api.get(`/budget-planning/status/${fiscalYear}`);
+    return response.data;
+  },
+
+  // List plans
+  listPlans: async (fiscalYear: number, statusFilter?: string) => {
+    const response = await api.get(`/budget-planning/plans/${fiscalYear}`, { params: { status_filter: statusFilter } });
+    return response.data;
+  },
+
+  // Get plan detail
+  getPlanDetail: async (planId: number) => {
+    const response = await api.get(`/budget-planning/plan/${planId}`);
+    return response.data;
+  },
+
+  // Get plan approvals
+  getPlanApprovals: async (planId: number) => {
+    const response = await api.get(`/budget-planning/plan/${planId}/approvals`);
+    return response.data;
+  },
+
+  // CFO Locking
+  lockGroup: async (groupId: number, fiscalYear: number, reason?: string) => {
+    const response = await api.post(`/budget-planning/lock-group/${groupId}`, null, {
+      params: { fiscal_year: fiscalYear, reason }
+    });
+    return response.data;
+  },
+
+  unlockGroup: async (groupId: number, fiscalYear: number) => {
+    const response = await api.post(`/budget-planning/unlock-group/${groupId}`, null, {
+      params: { fiscal_year: fiscalYear }
+    });
+    return response.data;
+  },
+
+  getLockedGroups: async (fiscalYear: number) => {
+    const response = await api.get(`/budget-planning/locked-groups/${fiscalYear}`);
+    return response.data;
+  },
+
+  getAllBudgetingGroups: async (fiscalYear: number) => {
+    const response = await api.get(`/budget-planning/all-groups/${fiscalYear}`);
     return response.data;
   },
 };

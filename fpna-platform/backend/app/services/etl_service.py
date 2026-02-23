@@ -65,26 +65,148 @@ def _get_dialect(engine: Engine) -> str:
 
 
 def _table_exists(engine: Engine, schema: Optional[str], table: str) -> bool:
-    """Check if table exists."""
-    inspector = inspect(engine)
-    sch = schema or ("dbo" if "mssql" in str(engine.dialect.name).lower() else "public")
+    """Check if table exists using raw SQL to avoid pyodbc parameter binding issues."""
+    dialect = _get_dialect(engine)
+    sch = schema or ("dbo" if dialect == "mssql" else "public")
+    
     try:
-        tables = inspector.get_table_names(schema=sch)
-    except Exception:
-        tables = inspector.get_table_names()
-    return table in tables
+        with engine.connect() as conn:
+            if dialect == "mssql":
+                # Use raw SQL without parameters to avoid pyodbc binding issues
+                result = conn.execute(text(f"""
+                    SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES 
+                    WHERE TABLE_SCHEMA = '{sch}' AND TABLE_NAME = '{table}' AND TABLE_TYPE = 'BASE TABLE'
+                """))
+            elif dialect == "postgresql":
+                result = conn.execute(text(f"""
+                    SELECT COUNT(*) FROM information_schema.tables 
+                    WHERE table_schema = '{sch}' AND table_name = '{table}'
+                """))
+            else:
+                result = conn.execute(text(f"SHOW TABLES LIKE '{table}'"))
+                return result.fetchone() is not None
+            
+            count = result.scalar()
+            return count > 0
+    except Exception as e:
+        logger.warning(f"Error checking table existence: {e}")
+        # Fallback to inspector
+        try:
+            inspector = inspect(engine)
+            tables = inspector.get_table_names(schema=sch)
+            return table in tables
+        except Exception:
+            return False
+
+
+def _pandas_dtype_to_sql(dtype, dialect: str) -> str:
+    """Convert pandas dtype to SQL data type."""
+    dtype_str = str(dtype).lower()
+    
+    if 'int64' in dtype_str or 'int32' in dtype_str:
+        return 'BIGINT' if dialect == 'mssql' else 'BIGINT'
+    elif 'int' in dtype_str:
+        return 'INT'
+    elif 'float' in dtype_str:
+        return 'FLOAT' if dialect == 'mssql' else 'DOUBLE PRECISION'
+    elif 'bool' in dtype_str:
+        return 'BIT' if dialect == 'mssql' else 'BOOLEAN'
+    elif 'datetime' in dtype_str:
+        return 'DATETIME2' if dialect == 'mssql' else 'TIMESTAMP'
+    elif 'date' in dtype_str:
+        return 'DATE'
+    elif 'object' in dtype_str:
+        return 'NVARCHAR(MAX)' if dialect == 'mssql' else 'TEXT'
+    else:
+        return 'NVARCHAR(MAX)' if dialect == 'mssql' else 'TEXT'
+
+
+def _escape_value(val, dialect: str) -> str:
+    """Escape a value for SQL insertion."""
+    if pd.isna(val) or val is None:
+        return "NULL"
+    if isinstance(val, bool):
+        return "1" if val else "0"
+    if isinstance(val, (int, float)):
+        if pd.isna(val):
+            return "NULL"
+        return str(val)
+    if isinstance(val, datetime):
+        return f"'{val.isoformat()}'"
+    # String - escape single quotes
+    val_str = str(val).replace("'", "''")
+    if dialect == "mssql":
+        return f"N'{val_str}'"
+    return f"'{val_str}'"
+
+
+def _insert_dataframe(engine: Engine, df: pd.DataFrame, schema: Optional[str], table: str, dialect: str) -> None:
+    """Insert DataFrame rows using raw SQL to avoid pyodbc parameter binding issues."""
+    if df.empty:
+        return
+    
+    full_table = _quoted_table(schema, table, dialect)
+    
+    # Quote column names
+    if dialect == "mssql":
+        columns = ", ".join([f"[{col}]" for col in df.columns])
+    else:
+        columns = ", ".join([f'"{col}"' for col in df.columns])
+    
+    # Insert in batches to avoid very long SQL statements
+    batch_size = 100
+    total_rows = len(df)
+    
+    with engine.begin() as conn:
+        for start in range(0, total_rows, batch_size):
+            end = min(start + batch_size, total_rows)
+            batch_df = df.iloc[start:end]
+            
+            values_list = []
+            for _, row in batch_df.iterrows():
+                row_values = ", ".join([_escape_value(v, dialect) for v in row])
+                values_list.append(f"({row_values})")
+            
+            values_sql = ",\n".join(values_list)
+            insert_sql = f"INSERT INTO {full_table} ({columns}) VALUES {values_sql}"
+            
+            try:
+                conn.execute(text(insert_sql))
+            except Exception as e:
+                logger.error(f"Batch insert failed at rows {start}-{end}: {e}")
+                # Fall back to row-by-row insert
+                for _, row in batch_df.iterrows():
+                    row_values = ", ".join([_escape_value(v, dialect) for v in row])
+                    single_insert = f"INSERT INTO {full_table} ({columns}) VALUES ({row_values})"
+                    conn.execute(text(single_insert))
+    
+    logger.info(f"Inserted {total_rows} rows into {full_table}")
 
 
 def _create_table_from_df(engine: Engine, df: pd.DataFrame, schema: Optional[str], table: str) -> None:
-    """Create table with schema from DataFrame. Uses pandas to_sql with if_exists='fail'."""
-    sch = schema or ("dbo" if "mssql" in engine.dialect.name else "public")
-    # For SQL Server dbo is default (schema=None); for PostgreSQL public is default
-    pandas_schema = None
-    if "mssql" in engine.dialect.name and sch != "dbo":
-        pandas_schema = sch
-    elif "postgresql" in engine.dialect.name and sch != "public":
-        pandas_schema = sch
-    df.head(0).to_sql(table, engine, schema=pandas_schema, if_exists="fail", index=False, chunksize=1000)
+    """Create table with schema from DataFrame using raw SQL to avoid pyodbc issues."""
+    dialect = _get_dialect(engine)
+    sch = schema or ("dbo" if dialect == "mssql" else "public")
+    
+    # Build CREATE TABLE statement
+    columns = []
+    for col_name, dtype in df.dtypes.items():
+        sql_type = _pandas_dtype_to_sql(dtype, dialect)
+        # Quote column names
+        if dialect == "mssql":
+            columns.append(f"[{col_name}] {sql_type} NULL")
+        else:
+            columns.append(f'"{col_name}" {sql_type}')
+    
+    columns_sql = ",\n    ".join(columns)
+    full_table = _quoted_table(sch, table, dialect)
+    
+    create_sql = f"CREATE TABLE {full_table} (\n    {columns_sql}\n)"
+    
+    logger.info(f"Creating table with SQL: {create_sql[:500]}...")
+    
+    with engine.begin() as conn:
+        conn.execute(text(create_sql))
 
 
 def run_etl_job(job: ETLJob, db_session) -> ETLRun:
@@ -138,14 +260,16 @@ def run_etl_job(job: ETLJob, db_session) -> ETLRun:
                 raise ValueError(f"Target table {job.target_table} does not exist. Enable 'Create target if missing' or create it manually.")
 
         # Load
-        if job.load_mode == "full_replace":
+        table_existed = _table_exists(target_engine, tgt_schema, job.target_table)
+        
+        if table_existed and job.load_mode == "full_replace":
             with target_engine.begin() as conn:
                 conn.execute(text(f"TRUNCATE TABLE {tgt_table}"))
 
         rows_loaded = len(df)
-        sch_for_pandas = tgt_schema if tgt_schema not in ("dbo", "public") else None
-        # pyodbc + SQL Server: multi-row INSERT hits 2100 param limit. Use chunksize=1 so each INSERT has one row only.
-        df.to_sql(job.target_table, target_engine, schema=sch_for_pandas, if_exists="append", index=False, method="multi", chunksize=1)
+        
+        # Use raw SQL inserts to avoid pyodbc parameter binding issues with pandas to_sql
+        _insert_dataframe(target_engine, df, tgt_schema, job.target_table, tgt_dialect)
 
         run.status = "success"
         run.rows_extracted = rows_extracted

@@ -101,6 +101,8 @@ class DriverValue(Base):
     
     account_code = Column(String(5), index=True)
     business_unit_code = Column(String(20), index=True)
+    budgeting_group_id = Column(Integer, index=True)  # For group-level drivers
+    bs_group = Column(Integer, index=True)  # 3-digit BS group code
     currency = Column(String(3), default="UZS")
     
     value = Column(Numeric(18, 6), nullable=False)
@@ -120,6 +122,7 @@ class DriverValue(Base):
 
     __table_args__ = (
         Index('ix_driver_value_lookup', 'driver_id', 'fiscal_year', 'month', 'account_code'),
+        Index('ix_driver_value_group', 'driver_id', 'fiscal_year', 'budgeting_group_id'),
     )
 
     def __repr__(self):
@@ -156,6 +159,37 @@ class DriverCalculationLog(Base):
 
     def __repr__(self):
         return f"<DriverCalculationLog(batch={self.calculation_batch_id}, driver={self.driver_id})>"
+
+
+class DriverGroupAssignment(Base):
+    """
+    Assignment of drivers to budgeting groups
+    
+    Defines which drivers are allowed for each budgeting group.
+    CFO/Admin assigns drivers to groups; department users can only select from assigned drivers.
+    """
+    __tablename__ = "driver_group_assignments"
+
+    id = Column(Integer, primary_key=True, index=True)
+    
+    driver_id = Column(Integer, ForeignKey("drivers.id", ondelete="CASCADE"), nullable=False, index=True)
+    budgeting_group_id = Column(Integer, nullable=False, index=True)  # Links to BudgetingGroup.group_id
+    
+    is_default = Column(Boolean, default=False)  # Default driver for this group
+    is_active = Column(Boolean, default=True)
+    
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    created_by_user_id = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    
+    # Relationship
+    driver = relationship("Driver")
+    
+    __table_args__ = (
+        Index('ix_driver_group_assignment', 'driver_id', 'budgeting_group_id', unique=True),
+    )
+
+    def __repr__(self):
+        return f"<DriverGroupAssignment(driver={self.driver_id}, group={self.budgeting_group_id})>"
 
 
 class GoldenRule(Base):

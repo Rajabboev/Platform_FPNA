@@ -40,6 +40,7 @@ import { DWHIntegrationPage } from './DWHIntegration';
 import { DataIntegrationPage } from './DataIntegration';
 import { VarianceReportPage } from './VarianceReport';
 import BudgetPlanning from './BudgetPlanning';
+import BudgetPlanningNew from './BudgetPlanningNew';
 import type { ColumnMapping, ColumnMappingSuggestion, HeaderValues } from '../services/api';
 import LoginPage from './LoginPage';
 import AppHeader from './AppHeader';
@@ -2866,7 +2867,8 @@ const FPNAApp = () => {
           {currentPage === 'drivers' && <DriversPage />}
           {currentPage === 'templates' && <TemplatesPage />}
           {currentPage === 'snapshots' && <SnapshotsPage />}
-          {currentPage === 'budget-planning' && <BudgetPlanning />}
+          {currentPage === 'budget-planning' && <BudgetPlanningNew />}
+          {currentPage === 'budget-planning-old' && <BudgetPlanning />}
           {currentPage === 'users' && (
             <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-8">
               <div className="flex items-center gap-4 mb-6">

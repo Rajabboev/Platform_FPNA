@@ -10,8 +10,10 @@ from typing import List, Optional
 from decimal import Decimal
 
 from app.database import get_db
-from app.models.driver import Driver, DriverValue, DriverCalculationLog, GoldenRule, DriverType as ModelDriverType
+from app.models.driver import Driver, DriverValue, DriverCalculationLog, GoldenRule, DriverGroupAssignment, DriverType as ModelDriverType
 from app.services.driver_engine import DriverEngine
+from app.utils.dependencies import get_current_active_user
+from app.models.user import User
 from app.schemas.driver import (
     DriverCreate, DriverUpdate, DriverResponse,
     DriverValueCreate, DriverValueUpdate, DriverValueResponse, BulkDriverValueCreate,
@@ -464,3 +466,224 @@ def delete_driver(code: str, db: Session = Depends(get_db)):
     db.delete(driver)
     db.commit()
     return {"message": "Driver deleted"}
+
+
+# ============================================================================
+# Driver-Group Assignments
+# ============================================================================
+
+group_assignments_router = APIRouter(prefix="/group-assignments", tags=["Driver Group Assignments"])
+
+
+@group_assignments_router.get("/by-group/{group_id}")
+def get_drivers_for_group(
+    group_id: int,
+    db: Session = Depends(get_db),
+):
+    """
+    Get all drivers assigned to a budgeting group.
+    Used by department users to see which drivers they can apply.
+    """
+    assignments = db.query(DriverGroupAssignment).filter(
+        DriverGroupAssignment.budgeting_group_id == group_id,
+        DriverGroupAssignment.is_active == True
+    ).all()
+    
+    result = []
+    for assignment in assignments:
+        driver = assignment.driver
+        result.append({
+            'assignment_id': assignment.id,
+            'driver_id': driver.id,
+            'driver_code': driver.code,
+            'driver_name': driver.name_en,
+            'driver_type': driver.driver_type.value if driver.driver_type else None,
+            'description': driver.description,
+            'formula': driver.formula,
+            'formula_description': driver.formula_description,
+            'default_value': float(driver.default_value) if driver.default_value else None,
+            'min_value': float(driver.min_value) if driver.min_value else None,
+            'max_value': float(driver.max_value) if driver.max_value else None,
+            'unit': driver.unit,
+            'is_default': assignment.is_default,
+        })
+    
+    return {
+        'budgeting_group_id': group_id,
+        'drivers': result,
+        'default_driver': next((d for d in result if d['is_default']), None),
+    }
+
+
+@group_assignments_router.get("")
+def list_all_group_assignments(
+    budgeting_group_id: Optional[int] = None,
+    driver_id: Optional[int] = None,
+    db: Session = Depends(get_db),
+):
+    """List all driver-group assignments with optional filters"""
+    query = db.query(DriverGroupAssignment).filter(DriverGroupAssignment.is_active == True)
+    
+    if budgeting_group_id:
+        query = query.filter(DriverGroupAssignment.budgeting_group_id == budgeting_group_id)
+    if driver_id:
+        query = query.filter(DriverGroupAssignment.driver_id == driver_id)
+    
+    assignments = query.all()
+    
+    result = []
+    for a in assignments:
+        result.append({
+            'id': a.id,
+            'driver_id': a.driver_id,
+            'driver_code': a.driver.code,
+            'driver_name': a.driver.name_en,
+            'budgeting_group_id': a.budgeting_group_id,
+            'is_default': a.is_default,
+            'created_at': a.created_at.isoformat() if a.created_at else None,
+        })
+    
+    return {'assignments': result}
+
+
+@group_assignments_router.post("")
+def assign_driver_to_group(
+    driver_id: int,
+    budgeting_group_id: int,
+    is_default: bool = False,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+):
+    """
+    Assign a driver to a budgeting group.
+    CFO/Admin only operation.
+    """
+    # Check if driver exists
+    driver = db.query(Driver).filter(Driver.id == driver_id).first()
+    if not driver:
+        raise HTTPException(status_code=404, detail="Driver not found")
+    
+    # Check if assignment already exists
+    existing = db.query(DriverGroupAssignment).filter(
+        DriverGroupAssignment.driver_id == driver_id,
+        DriverGroupAssignment.budgeting_group_id == budgeting_group_id
+    ).first()
+    
+    if existing:
+        # Reactivate if inactive
+        existing.is_active = True
+        existing.is_default = is_default
+        db.commit()
+        return {'status': 'updated', 'assignment_id': existing.id}
+    
+    # If setting as default, unset other defaults for this group
+    if is_default:
+        db.query(DriverGroupAssignment).filter(
+            DriverGroupAssignment.budgeting_group_id == budgeting_group_id,
+            DriverGroupAssignment.is_default == True
+        ).update({'is_default': False})
+    
+    assignment = DriverGroupAssignment(
+        driver_id=driver_id,
+        budgeting_group_id=budgeting_group_id,
+        is_default=is_default,
+        created_by_user_id=current_user.id,
+    )
+    db.add(assignment)
+    db.commit()
+    
+    return {'status': 'created', 'assignment_id': assignment.id}
+
+
+@group_assignments_router.post("/bulk")
+def bulk_assign_drivers_to_group(
+    budgeting_group_id: int,
+    driver_ids: List[int],
+    default_driver_id: Optional[int] = None,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+):
+    """
+    Bulk assign multiple drivers to a budgeting group.
+    Replaces existing assignments for this group.
+    """
+    # Deactivate existing assignments
+    db.query(DriverGroupAssignment).filter(
+        DriverGroupAssignment.budgeting_group_id == budgeting_group_id
+    ).update({'is_active': False})
+    
+    created = 0
+    for driver_id in driver_ids:
+        driver = db.query(Driver).filter(Driver.id == driver_id).first()
+        if not driver:
+            continue
+        
+        existing = db.query(DriverGroupAssignment).filter(
+            DriverGroupAssignment.driver_id == driver_id,
+            DriverGroupAssignment.budgeting_group_id == budgeting_group_id
+        ).first()
+        
+        if existing:
+            existing.is_active = True
+            existing.is_default = (driver_id == default_driver_id)
+        else:
+            assignment = DriverGroupAssignment(
+                driver_id=driver_id,
+                budgeting_group_id=budgeting_group_id,
+                is_default=(driver_id == default_driver_id),
+                created_by_user_id=current_user.id,
+            )
+            db.add(assignment)
+            created += 1
+    
+    db.commit()
+    return {'status': 'success', 'created': created, 'total_assigned': len(driver_ids)}
+
+
+@group_assignments_router.delete("/{assignment_id}")
+def unassign_driver_from_group(
+    assignment_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+):
+    """Remove a driver assignment from a budgeting group"""
+    assignment = db.query(DriverGroupAssignment).filter(
+        DriverGroupAssignment.id == assignment_id
+    ).first()
+    
+    if not assignment:
+        raise HTTPException(status_code=404, detail="Assignment not found")
+    
+    assignment.is_active = False
+    db.commit()
+    
+    return {'status': 'deleted', 'assignment_id': assignment_id}
+
+
+@group_assignments_router.patch("/{assignment_id}/set-default")
+def set_default_driver_for_group(
+    assignment_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+):
+    """Set a driver as the default for its budgeting group"""
+    assignment = db.query(DriverGroupAssignment).filter(
+        DriverGroupAssignment.id == assignment_id
+    ).first()
+    
+    if not assignment:
+        raise HTTPException(status_code=404, detail="Assignment not found")
+    
+    # Unset other defaults for this group
+    db.query(DriverGroupAssignment).filter(
+        DriverGroupAssignment.budgeting_group_id == assignment.budgeting_group_id,
+        DriverGroupAssignment.is_default == True
+    ).update({'is_default': False})
+    
+    assignment.is_default = True
+    db.commit()
+    
+    return {'status': 'success', 'assignment_id': assignment_id}
+
+
+router.include_router(group_assignments_router)

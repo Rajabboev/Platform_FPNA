@@ -33,10 +33,12 @@ import {
 } from 'lucide-react';
 import {
   coaAPI,
+  coaDimensionAPI,
   currenciesAPI,
   driversAPI,
   templatesAPI,
   snapshotsAPI,
+  departmentAPI,
 } from '../services/api';
 
 // ============================================
@@ -150,17 +152,21 @@ interface BusinessUnit {
 }
 
 export const COAPage = () => {
-  const [activeTab, setActiveTab] = useState<'hierarchy' | 'accounts' | 'business-units'>('hierarchy');
-  const [classes, setClasses] = useState<AccountClass[]>([]);
-  const [groups, setGroups] = useState<AccountGroup[]>([]);
-  const [categories, setCategories] = useState<AccountCategory[]>([]);
-  const [accounts, setAccounts] = useState<Account[]>([]);
-  const [businessUnits, setBusinessUnits] = useState<BusinessUnit[]>([]);
+  const [activeTab, setActiveTab] = useState<'dimension' | 'accounts' | 'budgeting-groups'>('dimension');
+  const [hierarchy, setHierarchy] = useState<any[]>([]);
+  const [accounts, setAccounts] = useState<any[]>([]);
+  const [budgetingGroups, setBudgetingGroups] = useState<any[]>([]);
+  const [stats, setStats] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
-  const [expandedClasses, setExpandedClasses] = useState<Set<string>>(new Set());
-  const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
+  const [searchTerm, setSearchTerm] = useState('');
+  const [filterBsClass, setFilterBsClass] = useState<string>('');
+  const [filterBudgetingGroup, setFilterBudgetingGroup] = useState<string>('');
+  
+  const [expandedBsClasses, setExpandedBsClasses] = useState<Set<number>>(new Set());
+  const [expandedBsGroups, setExpandedBsGroups] = useState<Set<string>>(new Set());
+  const [expandedBudgetingGroups, setExpandedBudgetingGroups] = useState<Set<number>>(new Set());
 
   useEffect(() => {
     fetchData();
@@ -170,225 +176,303 @@ export const COAPage = () => {
     setLoading(true);
     setError(null);
     try {
-      const [classesData, groupsData, categoriesData, accountsData, buData] = await Promise.all([
-        coaAPI.listClasses(),
-        coaAPI.listGroups(),
-        coaAPI.listCategories(),
-        coaAPI.listAccounts({ limit: 1000 }),
-        coaAPI.listBusinessUnits(),
+      const [hierarchyData, accountsData, groupsData, statsData] = await Promise.all([
+        coaDimensionAPI.getHierarchy(),
+        coaDimensionAPI.listAccounts({ limit: 1000 }),
+        coaDimensionAPI.getBudgetingGroups(),
+        coaDimensionAPI.getStats(),
       ]);
-      setClasses(classesData);
-      setGroups(groupsData);
-      setCategories(categoriesData);
-      setAccounts(accountsData);
-      setBusinessUnits(buData);
+      setHierarchy(hierarchyData.hierarchy || []);
+      setAccounts(accountsData.accounts || []);
+      setBudgetingGroups(groupsData.groups || []);
+      setStats(statsData);
+      
+      if (hierarchyData.hierarchy) {
+        setExpandedBsClasses(new Set(hierarchyData.hierarchy.map((c: any) => c.bs_flag)));
+      }
     } catch (err: unknown) {
-      setError((err as Error).message || 'Failed to load COA data');
+      setError((err as Error).message || 'Failed to load COA Dimension data');
     } finally {
       setLoading(false);
     }
   };
 
-  const handleSeedCOA = async () => {
+  const handleImportDimension = async () => {
     try {
       setLoading(true);
       setError(null);
-      const result = await coaAPI.seed();
-      setSuccess(`Seeded COA: ${result.classes} classes, ${result.groups} groups, ${result.categories} categories, ${result.accounts} accounts, ${result.business_units} business units`);
+      const result = await coaDimensionAPI.importFromUploads();
+      setSuccess(`Imported COA Dimension: ${result.imported} accounts`);
       await fetchData();
     } catch (err: unknown) {
-      setError((err as Error).message || 'Failed to seed COA data');
+      setError((err as Error).message || 'Failed to import COA Dimension');
     } finally {
       setLoading(false);
     }
   };
 
-  const toggleClass = (code: string) => {
-    const newExpanded = new Set(expandedClasses);
-    if (newExpanded.has(code)) {
-      newExpanded.delete(code);
+  const toggleBsClass = (bsFlag: number) => {
+    const newExpanded = new Set(expandedBsClasses);
+    if (newExpanded.has(bsFlag)) {
+      newExpanded.delete(bsFlag);
     } else {
-      newExpanded.add(code);
+      newExpanded.add(bsFlag);
     }
-    setExpandedClasses(newExpanded);
+    setExpandedBsClasses(newExpanded);
   };
 
-  const toggleGroup = (code: string) => {
-    const newExpanded = new Set(expandedGroups);
-    if (newExpanded.has(code)) {
-      newExpanded.delete(code);
+  const toggleBsGroup = (key: string) => {
+    const newExpanded = new Set(expandedBsGroups);
+    if (newExpanded.has(key)) {
+      newExpanded.delete(key);
     } else {
-      newExpanded.add(code);
+      newExpanded.add(key);
     }
-    setExpandedGroups(newExpanded);
+    setExpandedBsGroups(newExpanded);
   };
 
-  const HierarchyView = () => (
+  const toggleBudgetingGroup = (groupId: number) => {
+    const newExpanded = new Set(expandedBudgetingGroups);
+    if (newExpanded.has(groupId)) {
+      newExpanded.delete(groupId);
+    } else {
+      newExpanded.add(groupId);
+    }
+    setExpandedBudgetingGroups(newExpanded);
+  };
+
+  const filteredAccounts = accounts.filter(acc => {
+    const matchesSearch = !searchTerm || 
+      acc.coa_code?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      acc.coa_name?.toLowerCase().includes(searchTerm.toLowerCase());
+    const matchesBsClass = !filterBsClass || acc.bs_flag?.toString() === filterBsClass;
+    const matchesBudgetingGroup = !filterBudgetingGroup || acc.budgeting_groups?.toString() === filterBudgetingGroup;
+    return matchesSearch && matchesBsClass && matchesBudgetingGroup;
+  });
+
+  const DimensionHierarchyView = () => (
     <div className="space-y-2">
-      {classes.map((cls) => (
-        <div key={cls.id} className="border border-gray-200 rounded-lg overflow-hidden">
+      {hierarchy.map((bsClass) => (
+        <div key={bsClass.bs_flag} className="border border-gray-200 rounded-lg overflow-hidden">
+          {/* Level 1: BS Class */}
           <button
-            onClick={() => toggleClass(cls.code)}
-            className="w-full flex items-center gap-3 p-4 bg-gray-50 hover:bg-gray-100 transition-colors"
+            onClick={() => toggleBsClass(bsClass.bs_flag)}
+            className="w-full flex items-center gap-3 p-4 bg-gradient-to-r from-blue-50 to-white hover:from-blue-100 transition-colors"
           >
-            {expandedClasses.has(cls.code) ? (
-              <ChevronDown className="w-5 h-5 text-gray-500" />
+            {expandedBsClasses.has(bsClass.bs_flag) ? (
+              <ChevronDown className="w-5 h-5 text-blue-600" />
             ) : (
-              <ChevronRight className="w-5 h-5 text-gray-500" />
+              <ChevronRight className="w-5 h-5 text-blue-600" />
             )}
-            <span className="font-mono text-lg font-bold text-primary-600">{cls.code}</span>
-            <span className="font-semibold text-gray-900">{cls.name_en}</span>
-            <span className="text-gray-500 text-sm">({cls.name_uz})</span>
-            <span className={`ml-auto px-2 py-1 rounded text-xs font-medium ${
-              cls.nature === 'debit' ? 'bg-blue-100 text-blue-700' : 'bg-green-100 text-green-700'
-            }`}>
-              {cls.nature}
-            </span>
+            <span className="px-2 py-0.5 bg-blue-100 text-blue-700 text-xs rounded">Level 1</span>
+            <span className="font-bold text-gray-900 text-lg">{bsClass.bs_name}</span>
+            <span className="text-gray-500">({bsClass.account_count} accounts)</span>
           </button>
           
-          {expandedClasses.has(cls.code) && (
+          {expandedBsClasses.has(bsClass.bs_flag) && (
             <div className="border-t border-gray-200">
-              {groups.filter(g => g.class_code === cls.code).map((group) => (
-                <div key={group.id} className="border-b border-gray-100 last:border-b-0">
-                  <button
-                    onClick={() => toggleGroup(group.code)}
-                    className="w-full flex items-center gap-3 p-3 pl-10 hover:bg-gray-50 transition-colors"
-                  >
-                    {expandedGroups.has(group.code) ? (
-                      <ChevronDown className="w-4 h-4 text-gray-400" />
-                    ) : (
-                      <ChevronRight className="w-4 h-4 text-gray-400" />
+              {bsClass.bs_groups?.map((bsGroup: any) => {
+                const groupKey = `${bsClass.bs_flag}-${bsGroup.bs_group}`;
+                return (
+                  <div key={groupKey} className="border-b border-gray-100 last:border-b-0">
+                    {/* Level 2: BS Group */}
+                    <button
+                      onClick={() => toggleBsGroup(groupKey)}
+                      className="w-full flex items-center gap-3 p-3 pl-10 hover:bg-gray-50 transition-colors"
+                    >
+                      {expandedBsGroups.has(groupKey) ? (
+                        <ChevronDown className="w-4 h-4 text-gray-500" />
+                      ) : (
+                        <ChevronRight className="w-4 h-4 text-gray-500" />
+                      )}
+                      <span className="px-2 py-0.5 bg-green-100 text-green-700 text-xs rounded">Level 2</span>
+                      <span className="font-mono font-semibold text-gray-700">{bsGroup.bs_group}</span>
+                      <span className="text-gray-800">{bsGroup.group_name}</span>
+                      <span className="ml-auto text-sm text-gray-500">
+                        {bsGroup.budgeting_groups?.length || 0} budgeting groups
+                      </span>
+                    </button>
+                    
+                    {expandedBsGroups.has(groupKey) && (
+                      <div className="bg-gray-50">
+                        {bsGroup.budgeting_groups?.map((budgetGroup: any) => (
+                          <div key={budgetGroup.budgeting_group_id} className="border-t border-gray-100">
+                            {/* Level 3: Budgeting Group */}
+                            <button
+                              onClick={() => toggleBudgetingGroup(budgetGroup.budgeting_group_id)}
+                              className="w-full flex items-center gap-3 p-2 pl-16 hover:bg-gray-100 transition-colors"
+                            >
+                              {expandedBudgetingGroups.has(budgetGroup.budgeting_group_id) ? (
+                                <ChevronDown className="w-4 h-4 text-gray-400" />
+                              ) : (
+                                <ChevronRight className="w-4 h-4 text-gray-400" />
+                              )}
+                              <span className="px-2 py-0.5 bg-purple-100 text-purple-700 text-xs rounded">Level 3</span>
+                              <span className="text-gray-700 font-medium">{budgetGroup.budgeting_group_name || 'Unassigned'}</span>
+                              <span className="ml-auto text-xs text-gray-500">
+                                {budgetGroup.accounts?.length || 0} accounts
+                              </span>
+                            </button>
+                            
+                            {expandedBudgetingGroups.has(budgetGroup.budgeting_group_id) && budgetGroup.accounts && (
+                              <div className="bg-white py-1">
+                                {/* Level 4: COA Accounts */}
+                                {budgetGroup.accounts.map((acc: any) => (
+                                  <div key={acc.coa_code} className="flex items-center gap-3 py-1.5 pl-24 pr-4 hover:bg-blue-50/30">
+                                    <span className="px-1.5 py-0.5 bg-gray-100 text-gray-600 text-xs rounded">Level 4</span>
+                                    <span className="font-mono text-sm text-blue-600 font-medium">{acc.coa_code}</span>
+                                    <span className="text-gray-700 text-sm truncate">{acc.coa_name}</span>
+                                  </div>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                        ))}
+                      </div>
                     )}
-                    <span className="font-mono font-medium text-gray-700">{group.code}</span>
-                    <span className="text-gray-800">{group.name_en}</span>
-                    <span className="text-gray-500 text-sm">({group.name_uz})</span>
-                  </button>
-                  
-                  {expandedGroups.has(group.code) && (
-                    <div className="bg-gray-50 py-2">
-                      {categories.filter(c => c.group_code === group.code).map((cat) => (
-                        <div key={cat.id} className="flex items-center gap-3 py-2 pl-20 pr-4">
-                          <span className="font-mono text-sm text-gray-600">{cat.code}</span>
-                          <span className="text-gray-700">{cat.name_en}</span>
-                          <span className="text-gray-500 text-sm">({cat.name_uz})</span>
-                          <span className="ml-auto text-xs text-gray-400">
-                            {accounts.filter(a => a.category_code === cat.code).length} accounts
-                          </span>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              ))}
+                  </div>
+                );
+              })}
             </div>
           )}
         </div>
       ))}
-    </div>
-  );
-
-  const AccountsTable = () => (
-    <div className="overflow-x-auto">
-      <table className="w-full">
-        <thead>
-          <tr className="bg-gray-50 border-b border-gray-200">
-            <th className="text-left p-4 font-semibold text-gray-700">Code</th>
-            <th className="text-left p-4 font-semibold text-gray-700">Name (EN)</th>
-            <th className="text-left p-4 font-semibold text-gray-700">Name (UZ)</th>
-            <th className="text-left p-4 font-semibold text-gray-700">Category</th>
-            <th className="text-center p-4 font-semibold text-gray-700">Budgetable</th>
-            <th className="text-center p-4 font-semibold text-gray-700">Status</th>
-          </tr>
-        </thead>
-        <tbody>
-          {accounts.slice(0, 100).map((account) => (
-            <tr key={account.id} className="border-b border-gray-100 hover:bg-gray-50">
-              <td className="p-4 font-mono font-medium text-primary-600">{account.code}</td>
-              <td className="p-4 text-gray-900">{account.name_en}</td>
-              <td className="p-4 text-gray-600">{account.name_uz}</td>
-              <td className="p-4 text-gray-600">{account.category_code}</td>
-              <td className="p-4 text-center">
-                {account.is_budgetable ? (
-                  <Check className="w-5 h-5 text-green-600 mx-auto" />
-                ) : (
-                  <X className="w-5 h-5 text-gray-400 mx-auto" />
-                )}
-              </td>
-              <td className="p-4 text-center">
-                <span className={`px-2 py-1 rounded text-xs font-medium ${
-                  account.is_active ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-600'
-                }`}>
-                  {account.is_active ? 'Active' : 'Inactive'}
-                </span>
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-      {accounts.length > 100 && (
-        <p className="p-4 text-center text-gray-500">Showing first 100 of {accounts.length} accounts</p>
+      {hierarchy.length === 0 && (
+        <div className="text-center py-8 text-gray-500">
+          No COA Dimension data. Click "Import from Excel" to load data.
+        </div>
       )}
     </div>
   );
 
-  const BusinessUnitsTable = () => (
-    <div className="overflow-x-auto">
-      <table className="w-full">
-        <thead>
-          <tr className="bg-gray-50 border-b border-gray-200">
-            <th className="text-left p-4 font-semibold text-gray-700">Code</th>
-            <th className="text-left p-4 font-semibold text-gray-700">Name (EN)</th>
-            <th className="text-left p-4 font-semibold text-gray-700">Name (UZ)</th>
-            <th className="text-left p-4 font-semibold text-gray-700">Type</th>
-            <th className="text-center p-4 font-semibold text-gray-700">Status</th>
-          </tr>
-        </thead>
-        <tbody>
-          {businessUnits.map((bu) => (
-            <tr key={bu.id} className="border-b border-gray-100 hover:bg-gray-50">
-              <td className="p-4 font-mono font-medium text-primary-600">{bu.code}</td>
-              <td className="p-4 text-gray-900">{bu.name_en}</td>
-              <td className="p-4 text-gray-600">{bu.name_uz}</td>
-              <td className="p-4">
-                <span className={`px-2 py-1 rounded text-xs font-medium ${
-                  bu.unit_type === 'REVENUE_CENTER' ? 'bg-green-100 text-green-700' :
-                  bu.unit_type === 'COST_CENTER' ? 'bg-red-100 text-red-700' :
-                  bu.unit_type === 'PROFIT_CENTER' ? 'bg-blue-100 text-blue-700' :
-                  'bg-gray-100 text-gray-700'
-                }`}>
-                  {bu.unit_type.replace('_', ' ')}
-                </span>
-              </td>
-              <td className="p-4 text-center">
-                <span className={`px-2 py-1 rounded text-xs font-medium ${
-                  bu.is_active ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-600'
-                }`}>
-                  {bu.is_active ? 'Active' : 'Inactive'}
-                </span>
-              </td>
-            </tr>
+  const AccountsTable = () => (
+    <div>
+      {/* Filters */}
+      <div className="flex gap-4 mb-4 p-4 bg-gray-50 rounded-lg">
+        <div className="flex-1">
+          <input
+            type="text"
+            placeholder="Search by code or name..."
+            value={searchTerm}
+            onChange={(e) => setSearchTerm(e.target.value)}
+            className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+          />
+        </div>
+        <select
+          value={filterBsClass}
+          onChange={(e) => setFilterBsClass(e.target.value)}
+          className="px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+        >
+          <option value="">All BS Classes</option>
+          <option value="1">Assets</option>
+          <option value="2">Liabilities</option>
+          <option value="3">Capital</option>
+          <option value="9">Off-balance</option>
+        </select>
+        <select
+          value={filterBudgetingGroup}
+          onChange={(e) => setFilterBudgetingGroup(e.target.value)}
+          className="px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+        >
+          <option value="">All Budgeting Groups</option>
+          {budgetingGroups.map(g => (
+            <option key={g.group_id} value={g.group_id}>{g.group_name}</option>
           ))}
-        </tbody>
-      </table>
+        </select>
+      </div>
+
+      <div className="overflow-x-auto">
+        <table className="w-full text-sm">
+          <thead>
+            <tr className="bg-gray-100 border-b border-gray-200">
+              <th className="text-left p-3 font-semibold text-gray-700">COA Code</th>
+              <th className="text-left p-3 font-semibold text-gray-700">Account Name</th>
+              <th className="text-left p-3 font-semibold text-gray-700">BS Class</th>
+              <th className="text-left p-3 font-semibold text-gray-700">BS Group</th>
+              <th className="text-left p-3 font-semibold text-gray-700">Budgeting Group</th>
+              <th className="text-center p-3 font-semibold text-gray-700">Status</th>
+            </tr>
+          </thead>
+          <tbody>
+            {filteredAccounts.slice(0, 100).map((acc) => (
+              <tr key={acc.id} className="border-b border-gray-100 hover:bg-blue-50/30">
+                <td className="p-3 font-mono font-medium text-blue-600">{acc.coa_code}</td>
+                <td className="p-3 text-gray-900">{acc.coa_name}</td>
+                <td className="p-3 text-gray-600">{acc.bs_name}</td>
+                <td className="p-3 text-gray-600">{acc.bs_group} - {acc.group_name}</td>
+                <td className="p-3">
+                  {acc.budgeting_groups_name ? (
+                    <span className="px-2 py-1 bg-purple-100 text-purple-700 rounded text-xs">
+                      {acc.budgeting_groups_name}
+                    </span>
+                  ) : (
+                    <span className="text-gray-400 text-xs">Not assigned</span>
+                  )}
+                </td>
+                <td className="p-3 text-center">
+                  <span className={`px-2 py-1 rounded text-xs font-medium ${
+                    acc.is_active ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-600'
+                  }`}>
+                    {acc.is_active ? 'Active' : 'Inactive'}
+                  </span>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+        {filteredAccounts.length > 100 && (
+          <p className="p-4 text-center text-gray-500">Showing first 100 of {filteredAccounts.length} accounts</p>
+        )}
+        {filteredAccounts.length === 0 && (
+          <p className="p-8 text-center text-gray-500">No accounts match your filters</p>
+        )}
+      </div>
     </div>
   );
 
-  if (loading && classes.length === 0) return <LoadingSpinner />;
+  const BudgetingGroupsView = () => (
+    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+      {budgetingGroups.map((group) => (
+        <div key={group.group_id} className="border border-gray-200 rounded-lg p-4 hover:shadow-md transition-shadow">
+          <div className="flex items-start justify-between mb-2">
+            <div>
+              <h3 className="font-semibold text-gray-900">{group.group_name}</h3>
+              <p className="text-sm text-gray-500">ID: {group.group_id}</p>
+            </div>
+            <span className="px-2 py-1 bg-blue-100 text-blue-700 text-xs rounded">
+              {group.account_count} accounts
+            </span>
+          </div>
+          <div className="text-sm text-gray-600 mt-2">
+            <div>BS Class: {group.bs_name || 'Mixed'}</div>
+            <div>Category: {group.category || 'N/A'}</div>
+          </div>
+        </div>
+      ))}
+      {budgetingGroups.length === 0 && (
+        <div className="col-span-full text-center py-8 text-gray-500">
+          No budgeting groups found. Import COA Dimension data first.
+        </div>
+      )}
+    </div>
+  );
+
+  if (loading && hierarchy.length === 0) return <LoadingSpinner />;
 
   return (
     <div>
       <PageHeader
-        title="Chart of Accounts"
-        subtitle="Manage account hierarchy and business units"
+        title="Chart of Accounts & Hierarchy"
+        subtitle="COA Dimension with 4-level hierarchy: BS Class → BS Group → Budgeting Group → COA Account"
         actions={
           <div className="flex gap-2">
             <button
-              onClick={handleSeedCOA}
+              onClick={handleImportDimension}
               disabled={loading}
               className="flex items-center gap-2 px-4 py-2 bg-primary-600 text-white rounded-lg hover:bg-primary-700 disabled:opacity-50"
             >
               <Database className="w-4 h-4" />
-              Seed COA Data
+              Import from Excel
             </button>
             <button
               onClick={fetchData}
@@ -401,15 +485,37 @@ export const COAPage = () => {
         }
       />
 
+      {/* Stats Summary */}
+      {stats && (
+        <div className="grid grid-cols-4 gap-4 mb-4">
+          <div className="bg-white border rounded-lg p-4">
+            <div className="text-sm text-gray-500">Total Accounts</div>
+            <div className="text-2xl font-bold text-blue-600">{stats.total_accounts}</div>
+          </div>
+          <div className="bg-white border rounded-lg p-4">
+            <div className="text-sm text-gray-500">Active Accounts</div>
+            <div className="text-2xl font-bold text-green-600">{stats.active_accounts}</div>
+          </div>
+          <div className="bg-white border rounded-lg p-4">
+            <div className="text-sm text-gray-500">BS Groups</div>
+            <div className="text-2xl font-bold text-purple-600">{stats.bs_groups}</div>
+          </div>
+          <div className="bg-white border rounded-lg p-4">
+            <div className="text-sm text-gray-500">Budgeting Groups</div>
+            <div className="text-2xl font-bold text-amber-600">{stats.budgeting_groups}</div>
+          </div>
+        </div>
+      )}
+
       {error && <div className="mb-4"><ErrorMessage message={error} /></div>}
       {success && <div className="mb-4"><SuccessMessage message={success} /></div>}
 
       <Card>
         <div className="p-4 border-b border-gray-200 flex gap-2">
-          <TabButton active={activeTab === 'hierarchy'} onClick={() => setActiveTab('hierarchy')}>
+          <TabButton active={activeTab === 'dimension'} onClick={() => setActiveTab('dimension')}>
             <div className="flex items-center gap-2">
               <Layers className="w-4 h-4" />
-              Hierarchy
+              4-Level Hierarchy
             </div>
           </TabButton>
           <TabButton active={activeTab === 'accounts'} onClick={() => setActiveTab('accounts')}>
@@ -418,18 +524,18 @@ export const COAPage = () => {
               Accounts ({accounts.length})
             </div>
           </TabButton>
-          <TabButton active={activeTab === 'business-units'} onClick={() => setActiveTab('business-units')}>
+          <TabButton active={activeTab === 'budgeting-groups'} onClick={() => setActiveTab('budgeting-groups')}>
             <div className="flex items-center gap-2">
               <Building2 className="w-4 h-4" />
-              Business Units ({businessUnits.length})
+              Budgeting Groups ({budgetingGroups.length})
             </div>
           </TabButton>
         </div>
 
         <div className="p-4">
-          {activeTab === 'hierarchy' && <HierarchyView />}
+          {activeTab === 'dimension' && <DimensionHierarchyView />}
           {activeTab === 'accounts' && <AccountsTable />}
-          {activeTab === 'business-units' && <BusinessUnitsTable />}
+          {activeTab === 'budgeting-groups' && <BudgetingGroupsView />}
         </div>
       </Card>
     </div>
@@ -1027,9 +1133,22 @@ export const TemplatesPage = () => {
   const [templates, setTemplates] = useState<BudgetTemplate[]>([]);
   const [sections, setSections] = useState<TemplateSection[]>([]);
   const [assignments, setAssignments] = useState<TemplateAssignment[]>([]);
+  const [businessUnits, setBusinessUnits] = useState<any[]>([]);
+  const [departments, setDepartments] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
+  
+  // Assignment modal state
+  const [showAssignModal, setShowAssignModal] = useState(false);
+  const [assignForm, setAssignForm] = useState({
+    template_id: 0,
+    business_unit_id: 0,
+    department_id: 0,
+    fiscal_year: new Date().getFullYear() + 1,
+    deadline: '',
+  });
+  const [assignSaving, setAssignSaving] = useState(false);
 
   useEffect(() => {
     fetchData();
@@ -1039,16 +1158,68 @@ export const TemplatesPage = () => {
     setLoading(true);
     setError(null);
     try {
-      const [templatesData, sectionsData, assignmentsData] = await Promise.all([
+      const [templatesData, sectionsData, assignmentsData, buData, deptData] = await Promise.all([
         templatesAPI.list(),
         templatesAPI.listSections(),
         templatesAPI.listAssignments(),
+        coaAPI.listBusinessUnits().catch(() => []),
+        departmentAPI.list().catch(() => ({ departments: [] })),
       ]);
       setTemplates(templatesData);
       setSections(sectionsData);
       setAssignments(assignmentsData);
+      setBusinessUnits(buData || []);
+      setDepartments(deptData.departments || deptData || []);
     } catch (err: unknown) {
       setError((err as Error).message || 'Failed to load templates');
+    } finally {
+      setLoading(false);
+    }
+  };
+  
+  const handleCreateAssignment = async () => {
+    if (!assignForm.template_id || (!assignForm.business_unit_id && !assignForm.department_id)) {
+      setError('Please select a template and either a business unit or department');
+      return;
+    }
+    
+    try {
+      setAssignSaving(true);
+      setError(null);
+      await templatesAPI.createAssignment({
+        template_id: assignForm.template_id,
+        business_unit_id: assignForm.business_unit_id || undefined,
+        department_id: assignForm.department_id || undefined,
+        fiscal_year: assignForm.fiscal_year,
+        deadline: assignForm.deadline || undefined,
+      });
+      setSuccess('Template assigned successfully');
+      setShowAssignModal(false);
+      setAssignForm({
+        template_id: 0,
+        business_unit_id: 0,
+        department_id: 0,
+        fiscal_year: new Date().getFullYear() + 1,
+        deadline: '',
+      });
+      await fetchData();
+    } catch (err: unknown) {
+      setError((err as Error).message || 'Failed to create assignment');
+    } finally {
+      setAssignSaving(false);
+    }
+  };
+  
+  const handleDeleteAssignment = async (assignmentId: number) => {
+    if (!confirm('Are you sure you want to delete this assignment?')) return;
+    
+    try {
+      setLoading(true);
+      await templatesAPI.deleteAssignment(assignmentId);
+      setSuccess('Assignment deleted successfully');
+      await fetchData();
+    } catch (err: unknown) {
+      setError((err as Error).message || 'Failed to delete assignment');
     } finally {
       setLoading(false);
     }
@@ -1199,51 +1370,90 @@ export const TemplatesPage = () => {
   );
 
   const AssignmentsTable = () => (
-    <div className="overflow-x-auto">
-      {assignments.length === 0 ? (
-        <div className="text-center py-12 text-gray-500">
-          <ClipboardList className="w-12 h-12 mx-auto mb-4 text-gray-300" />
-          <p>No template assignments yet</p>
-          <p className="text-sm mt-2">Assign templates to business units to start budget planning</p>
-        </div>
-      ) : (
-        <table className="w-full">
-          <thead>
-            <tr className="bg-gray-50 border-b border-gray-200">
-              <th className="text-left p-4 font-semibold text-gray-700">Template</th>
-              <th className="text-left p-4 font-semibold text-gray-700">Business Unit</th>
-              <th className="text-center p-4 font-semibold text-gray-700">Fiscal Year</th>
-              <th className="text-left p-4 font-semibold text-gray-700">Deadline</th>
-              <th className="text-center p-4 font-semibold text-gray-700">Status</th>
-              <th className="text-center p-4 font-semibold text-gray-700">Actions</th>
-            </tr>
-          </thead>
-          <tbody>
-            {assignments.map((assignment) => (
-              <tr key={assignment.id} className="border-b border-gray-100 hover:bg-gray-50">
-                <td className="p-4 font-medium text-gray-900">
-                  {assignment.template?.name_en || `Template #${assignment.template_id}`}
-                </td>
-                <td className="p-4 text-gray-600">
-                  {assignment.business_unit?.name_en || `BU #${assignment.business_unit_id}`}
-                </td>
-                <td className="p-4 text-center font-semibold">{assignment.fiscal_year}</td>
-                <td className="p-4 text-gray-600">{assignment.deadline || '-'}</td>
-                <td className="p-4 text-center">
-                  <span className={`px-2 py-1 rounded text-xs font-medium ${getStatusColor(assignment.status)}`}>
-                    {assignment.status}
-                  </span>
-                </td>
-                <td className="p-4 text-center">
-                  <button className="text-primary-600 hover:text-primary-700">
-                    <Pencil className="w-4 h-4" />
-                  </button>
-                </td>
+    <div>
+      <div className="flex justify-end mb-4">
+        <button
+          onClick={() => setShowAssignModal(true)}
+          className="flex items-center gap-2 px-4 py-2 bg-primary-600 text-white rounded-lg hover:bg-primary-700"
+        >
+          <Plus className="w-4 h-4" />
+          Assign Template
+        </button>
+      </div>
+      <div className="overflow-x-auto">
+        {assignments.length === 0 ? (
+          <div className="text-center py-12 text-gray-500">
+            <ClipboardList className="w-12 h-12 mx-auto mb-4 text-gray-300" />
+            <p>No template assignments yet</p>
+            <p className="text-sm mt-2">Click "Assign Template" to assign templates to departments or business units</p>
+          </div>
+        ) : (
+          <table className="w-full">
+            <thead>
+              <tr className="bg-gray-50 border-b border-gray-200">
+                <th className="text-left p-4 font-semibold text-gray-700">Template</th>
+                <th className="text-left p-4 font-semibold text-gray-700">Assigned To</th>
+                <th className="text-center p-4 font-semibold text-gray-700">Fiscal Year</th>
+                <th className="text-left p-4 font-semibold text-gray-700">Deadline</th>
+                <th className="text-center p-4 font-semibold text-gray-700">Status</th>
+                <th className="text-center p-4 font-semibold text-gray-700">Actions</th>
               </tr>
-            ))}
-          </tbody>
-        </table>
-      )}
+            </thead>
+            <tbody>
+              {assignments.map((assignment: any) => (
+                <tr key={assignment.id} className="border-b border-gray-100 hover:bg-gray-50">
+                  <td className="p-4">
+                    <div className="font-medium text-gray-900">
+                      {assignment.template_name || assignment.template?.name_en || `Template #${assignment.template_id}`}
+                    </div>
+                    <div className="text-xs text-gray-500">{assignment.template_code}</div>
+                  </td>
+                  <td className="p-4">
+                    <div className="text-gray-900 font-medium">
+                      {assignment.business_unit_name || assignment.department_name || 
+                       assignment.business_unit?.name_en || assignment.department?.name_en || 
+                       (assignment.business_unit_id ? `Business Unit #${assignment.business_unit_id}` : 
+                        assignment.department_id ? `Department #${assignment.department_id}` : 'Not assigned')}
+                    </div>
+                    {assignment.business_unit_code && (
+                      <div className="text-xs text-gray-500">Code: {assignment.business_unit_code}</div>
+                    )}
+                  </td>
+                  <td className="p-4 text-center">
+                    <span className="font-semibold text-lg">{assignment.fiscal_year}</span>
+                  </td>
+                  <td className="p-4">
+                    {assignment.deadline ? (
+                      <div className="flex items-center gap-2 text-gray-600">
+                        <Calendar className="w-4 h-4" />
+                        {new Date(assignment.deadline).toLocaleDateString()}
+                      </div>
+                    ) : (
+                      <span className="text-gray-400">No deadline</span>
+                    )}
+                  </td>
+                  <td className="p-4 text-center">
+                    <span className={`px-3 py-1 rounded-full text-xs font-medium ${getStatusColor(assignment.status)}`}>
+                      {assignment.status?.replace('_', ' ').toUpperCase() || 'PENDING'}
+                    </span>
+                  </td>
+                  <td className="p-4 text-center">
+                    <div className="flex items-center justify-center gap-2">
+                      <button 
+                        onClick={() => handleDeleteAssignment(assignment.id)}
+                        className="text-red-600 hover:text-red-700 p-1"
+                        title="Delete assignment"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </button>
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
     </div>
   );
 
@@ -1296,6 +1506,116 @@ export const TemplatesPage = () => {
           {activeTab === 'assignments' && <AssignmentsTable />}
         </div>
       </Card>
+      
+      {/* Assignment Modal */}
+      {showAssignModal && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+          <div className="bg-white rounded-lg shadow-xl w-full max-w-md">
+            <div className="p-4 border-b">
+              <h3 className="text-lg font-semibold">Assign Template</h3>
+              <p className="text-sm text-gray-500">Assign a budget template to a department or business unit</p>
+            </div>
+            <div className="p-4 space-y-4">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  Template <span className="text-red-500">*</span>
+                </label>
+                <select
+                  value={assignForm.template_id}
+                  onChange={(e) => setAssignForm({ ...assignForm, template_id: parseInt(e.target.value) })}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500"
+                >
+                  <option value={0}>Select a template...</option>
+                  {templates.filter(t => t.status === 'active').map((t) => (
+                    <option key={t.id} value={t.id}>{t.name_en} ({t.code})</option>
+                  ))}
+                </select>
+              </div>
+              
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  Department
+                </label>
+                <select
+                  value={assignForm.department_id}
+                  onChange={(e) => setAssignForm({ ...assignForm, department_id: parseInt(e.target.value), business_unit_id: 0 })}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500"
+                >
+                  <option value={0}>Select a department...</option>
+                  {departments.map((d: any) => (
+                    <option key={d.id} value={d.id}>{d.name_en} ({d.code})</option>
+                  ))}
+                </select>
+              </div>
+              
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  Business Unit (optional)
+                </label>
+                <select
+                  value={assignForm.business_unit_id}
+                  onChange={(e) => setAssignForm({ ...assignForm, business_unit_id: parseInt(e.target.value), department_id: 0 })}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500"
+                >
+                  <option value={0}>Select a business unit...</option>
+                  {businessUnits.map((bu: any) => (
+                    <option key={bu.id} value={bu.id}>{bu.name_en} ({bu.code})</option>
+                  ))}
+                </select>
+              </div>
+              
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  Fiscal Year <span className="text-red-500">*</span>
+                </label>
+                <input
+                  type="number"
+                  value={assignForm.fiscal_year}
+                  onChange={(e) => setAssignForm({ ...assignForm, fiscal_year: parseInt(e.target.value) })}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500"
+                />
+              </div>
+              
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  Deadline
+                </label>
+                <input
+                  type="date"
+                  value={assignForm.deadline}
+                  onChange={(e) => setAssignForm({ ...assignForm, deadline: e.target.value })}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500"
+                />
+              </div>
+            </div>
+            <div className="flex justify-end gap-2 p-4 border-t bg-gray-50">
+              <button
+                onClick={() => {
+                  setShowAssignModal(false);
+                  setAssignForm({
+                    template_id: 0,
+                    business_unit_id: 0,
+                    department_id: 0,
+                    fiscal_year: new Date().getFullYear() + 1,
+                    deadline: '',
+                  });
+                }}
+                className="px-4 py-2 text-gray-700 hover:bg-gray-100 rounded-lg"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleCreateAssignment}
+                disabled={assignSaving || !assignForm.template_id}
+                className="flex items-center gap-2 px-4 py-2 bg-primary-600 text-white rounded-lg hover:bg-primary-700 disabled:opacity-50"
+              >
+                {assignSaving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Check className="w-4 h-4" />}
+                Assign Template
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

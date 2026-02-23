@@ -25,6 +25,9 @@ from app.models.currency import Currency, CurrencyRate, BudgetFXRate  # noqa: F4
 from app.models.driver import Driver, DriverValue, DriverCalculationLog, GoldenRule  # noqa: F401
 from app.models.template import BudgetTemplate, TemplateSection, TemplateAssignment, TemplateLineItem  # noqa: F401
 from app.models.baseline import BaselineData, BudgetBaseline, BudgetPlanned  # noqa: F401
+from app.models.coa_dimension import COADimension, BudgetingGroup, BSClass  # noqa: F401
+from app.models.department import Department, DepartmentAssignment  # noqa: F401
+from app.models.budget_plan import BudgetPlan, BudgetPlanGroup, BudgetPlanDetail, BudgetPlanApproval  # noqa: F401
 
 # Create database tables (including dwh_connections, etl_jobs, etl_runs)
 Base.metadata.create_all(bind=engine)
@@ -191,10 +194,12 @@ async def health_check():
 
 # Import routers AFTER app is created
 from app.api import books, budgets_excel, budgets_upload, auth, approvals, notifications, connections, etl, coa
-from app.api import snapshots, currencies, drivers, templates, dwh_integration, baseline
+from app.api import snapshots, currencies, drivers, templates, dwh_integration, baseline, data_upload, planned_approvals
+from app.api import coa_dimension
+from app.api import departments, budget_planning
 
 # Include routers
-app.include_router(books.router, prefix="/api/v1")
+# Note: books router removed (was test model only)
 app.include_router(budgets_excel.router, prefix="/api/v1")
 app.include_router(budgets_upload.router, prefix="/api/v1")
 app.include_router(auth.router, prefix="/api/v1")
@@ -209,6 +214,11 @@ app.include_router(drivers.router, prefix="/api/v1")
 app.include_router(templates.router, prefix="/api/v1")
 app.include_router(dwh_integration.router, prefix="/api/v1")
 app.include_router(baseline.router, prefix="/api/v1")
+app.include_router(data_upload.router, prefix="/api/v1")
+app.include_router(planned_approvals.router, prefix="/api/v1")
+app.include_router(coa_dimension.router, prefix="/api/v1")
+app.include_router(departments.router, prefix="/api/v1")
+app.include_router(budget_planning.router, prefix="/api/v1")
 
 # Root endpoint
 @app.get("/", tags=["root"])
