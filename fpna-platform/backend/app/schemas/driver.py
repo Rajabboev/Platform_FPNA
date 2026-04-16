@@ -216,7 +216,7 @@ class SpreadAnalysis(BaseModel):
 
 
 class MetadataLogicDriverBase(BaseModel):
-    driver_id: int
+    driver_id: Optional[int] = None
     code: str = Field(..., max_length=100)
     name: str = Field(..., max_length=255)
     description: Optional[str] = None

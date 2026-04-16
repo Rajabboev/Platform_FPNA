@@ -335,7 +335,7 @@ try:
             _conn.execute(_text("""
                 CREATE TABLE metadata_logic_drivers (
                     id INT IDENTITY(1,1) PRIMARY KEY,
-                    driver_id INT NOT NULL REFERENCES drivers(id) ON DELETE CASCADE,
+                    driver_id INT NULL REFERENCES drivers(id),
                     code NVARCHAR(100) NOT NULL,
                     name NVARCHAR(255) NOT NULL,
                     description NVARCHAR(MAX) NULL,
@@ -359,6 +359,11 @@ try:
             """))
             _conn.execute(_text("CREATE INDEX ix_mld_driver ON metadata_logic_drivers(driver_id, is_active, is_published)"))
             _conn.execute(_text("CREATE INDEX ix_mld_code ON metadata_logic_drivers(code)"))
+        else:
+            try:
+                _conn.execute(_text("ALTER TABLE metadata_logic_drivers ALTER COLUMN driver_id INT NULL"))
+            except Exception:
+                pass
 
         if 'metadata_logic_rules' not in insp.get_table_names():
             _conn.execute(_text("""

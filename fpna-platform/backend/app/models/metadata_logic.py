@@ -20,7 +20,7 @@ class MetadataLogicDriver(Base):
     __tablename__ = "metadata_logic_drivers"
 
     id = Column(Integer, primary_key=True, index=True)
-    driver_id = Column(Integer, ForeignKey("drivers.id"), nullable=False, index=True)
+    driver_id = Column(Integer, ForeignKey("drivers.id"), nullable=True, index=True)
     code = Column(String(100), nullable=False, index=True)
     name = Column(String(255), nullable=False)
     description = Column(Text)
