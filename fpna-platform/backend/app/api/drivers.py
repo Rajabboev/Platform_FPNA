@@ -11,19 +11,31 @@ from decimal import Decimal
 
 from app.database import get_db
 from app.models.driver import Driver, DriverValue, DriverCalculationLog, GoldenRule, DriverGroupAssignment, DriverType as ModelDriverType
+from app.models.metadata_logic import MetadataLogicDriver, MetadataLogicRevision, MetadataExecutionLog
 from app.services.driver_engine import DriverEngine
+from app.services.metadata_rule_engine import MetadataRuleEngine
+from app.services.metadata_formula_engine import FormulaValidationError
 from app.utils.dependencies import get_current_active_user
-from app.models.user import User
+from app.models.user import User, RoleEnum
 from app.schemas.driver import (
     DriverCreate, DriverUpdate, DriverResponse,
     DriverValueCreate, DriverValueUpdate, DriverValueResponse, BulkDriverValueCreate,
     DriverValueMatrix,
     GoldenRuleCreate, GoldenRuleUpdate, GoldenRuleResponse,
     DriverCalculationRequest, DriverCalculationResponse, DriverCalculationResult,
-    ValidationResult, SpreadAnalysis, DriverType
+    ValidationResult, SpreadAnalysis, DriverType,
+    MetadataLogicDriverCreate, MetadataLogicDriverUpdate, MetadataLogicDriverResponse,
+    MetadataFormulaValidationRequest, MetadataFormulaValidationResponse,
+    MetadataPublishResponse, MetadataRevisionResponse,
 )
 
 router = APIRouter(prefix="/drivers", tags=["Drivers"])
+
+
+def _require_admin_or_cfo(current_user: User):
+    role_names = {r.name.upper() for r in (current_user.roles or []) if r and r.name}
+    if RoleEnum.ADMIN.value not in role_names and RoleEnum.CFO.value not in role_names:
+        raise HTTPException(status_code=403, detail="Admin or CFO role required")
 
 
 @router.get("", response_model=List[DriverResponse])
@@ -79,6 +91,15 @@ def seed_fpna_planning_defaults(db: Session = Depends(get_db)):
     """
     engine = DriverEngine(db)
     return engine.seed_fpna_planning_baseline()
+
+
+@router.post("/seed-metadata-logic", response_model=dict)
+def seed_metadata_logic(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+):
+    _require_admin_or_cfo(current_user)
+    return MetadataRuleEngine(db).seed_default_driver_logic(current_user.id)
 
 
 values_router = APIRouter(prefix="/values", tags=["Driver Values"])
@@ -873,3 +894,210 @@ def set_default_driver_for_group(
 
 
 router.include_router(group_assignments_router)
+
+
+metadata_router = APIRouter(prefix="/metadata-logic", tags=["Metadata Logic"])
+
+
+@metadata_router.get("", response_model=List[MetadataLogicDriverResponse])
+def list_metadata_logic(
+    driver_code: Optional[str] = None,
+    is_active: Optional[bool] = None,
+    db: Session = Depends(get_db),
+):
+    query = db.query(MetadataLogicDriver)
+    if driver_code:
+        driver = db.query(Driver).filter(Driver.code == driver_code).first()
+        if not driver:
+            return []
+        query = query.filter(MetadataLogicDriver.driver_id == driver.id)
+    if is_active is not None:
+        query = query.filter(MetadataLogicDriver.is_active == is_active)
+    return query.order_by(MetadataLogicDriver.driver_id, MetadataLogicDriver.version.desc()).all()
+
+
+@metadata_router.post("", response_model=MetadataLogicDriverResponse, status_code=201)
+def create_metadata_logic(
+    data: MetadataLogicDriverCreate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+):
+    _require_admin_or_cfo(current_user)
+    engine = MetadataRuleEngine(db)
+    engine.formula_engine.validate_formula(data.formula_expr)
+
+    latest = (
+        db.query(MetadataLogicDriver)
+        .filter(
+            MetadataLogicDriver.driver_id == data.driver_id,
+            MetadataLogicDriver.code == data.code,
+        )
+        .order_by(MetadataLogicDriver.version.desc())
+        .first()
+    )
+    version = (latest.version + 1) if latest else 1
+    row = MetadataLogicDriver(**data.model_dump(), version=version, created_by_user_id=current_user.id)
+    db.add(row)
+    db.flush()
+    engine.create_revision(
+        entity_type="driver",
+        entity_id=row.id,
+        version=row.version,
+        change_type="create",
+        before_payload=None,
+        after_payload=data.model_dump(),
+        changed_by_user_id=current_user.id,
+    )
+    db.commit()
+    db.refresh(row)
+    return row
+
+
+@metadata_router.patch("/{logic_id}", response_model=MetadataLogicDriverResponse)
+def update_metadata_logic(
+    logic_id: int,
+    data: MetadataLogicDriverUpdate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+):
+    _require_admin_or_cfo(current_user)
+    row = db.query(MetadataLogicDriver).filter(MetadataLogicDriver.id == logic_id).first()
+    if not row:
+        raise HTTPException(status_code=404, detail="Metadata logic not found")
+    before = {
+        "name": row.name,
+        "description": row.description,
+        "scope_fields": row.scope_fields,
+        "formula_expr": row.formula_expr,
+        "output_mode": row.output_mode,
+        "rounding_mode": row.rounding_mode,
+        "min_value": row.min_value,
+        "max_value": row.max_value,
+        "is_active": row.is_active,
+    }
+    payload = data.model_dump(exclude_unset=True)
+    if "formula_expr" in payload:
+        MetadataRuleEngine(db).formula_engine.validate_formula(payload["formula_expr"])
+    for field, value in payload.items():
+        setattr(row, field, value)
+    row.is_published = False
+    row.approved_by_user_id = None
+    row.published_at = None
+    MetadataRuleEngine(db).create_revision(
+        entity_type="driver",
+        entity_id=row.id,
+        version=row.version,
+        change_type="update",
+        before_payload=before,
+        after_payload=payload,
+        changed_by_user_id=current_user.id,
+    )
+    db.commit()
+    db.refresh(row)
+    return row
+
+
+@metadata_router.post("/{logic_id}/validate", response_model=MetadataFormulaValidationResponse)
+def validate_metadata_logic(
+    logic_id: int,
+    request: MetadataFormulaValidationRequest,
+    db: Session = Depends(get_db),
+):
+    row = db.query(MetadataLogicDriver).filter(MetadataLogicDriver.id == logic_id).first()
+    if not row:
+        raise HTTPException(status_code=404, detail="Metadata logic not found")
+    engine = MetadataRuleEngine(db)
+    context = request.sample_context or {"baseline": 1000, "rate": 10, "month": 1}
+    formula = request.formula_expr or row.formula_expr
+    try:
+        sample = engine.formula_engine.evaluate(formula, context)
+        return MetadataFormulaValidationResponse(
+            is_valid=True,
+            message="Formula is valid",
+            sample_result=sample,
+        )
+    except FormulaValidationError as exc:
+        return MetadataFormulaValidationResponse(is_valid=False, message=str(exc))
+
+
+@metadata_router.post("/{logic_id}/publish", response_model=MetadataPublishResponse)
+def publish_metadata_logic(
+    logic_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+):
+    _require_admin_or_cfo(current_user)
+    row = db.query(MetadataLogicDriver).filter(MetadataLogicDriver.id == logic_id).first()
+    if not row:
+        raise HTTPException(status_code=404, detail="Metadata logic not found")
+    MetadataRuleEngine(db).formula_engine.validate_formula(row.formula_expr)
+    row.is_published = True
+    row.approved_by_user_id = current_user.id
+    from datetime import datetime, timezone
+    row.published_at = datetime.now(timezone.utc)
+    MetadataRuleEngine(db).create_revision(
+        entity_type="driver",
+        entity_id=row.id,
+        version=row.version,
+        change_type="publish",
+        before_payload={"is_published": False},
+        after_payload={"is_published": True},
+        changed_by_user_id=current_user.id,
+    )
+    db.commit()
+    return MetadataPublishResponse(
+        id=row.id,
+        code=row.code,
+        version=row.version,
+        is_published=row.is_published,
+        published_at=row.published_at,
+    )
+
+
+@metadata_router.get("/{logic_id}/revisions", response_model=List[MetadataRevisionResponse])
+def get_metadata_revisions(
+    logic_id: int,
+    db: Session = Depends(get_db),
+):
+    return (
+        db.query(MetadataLogicRevision)
+        .filter(
+            MetadataLogicRevision.entity_type == "driver",
+            MetadataLogicRevision.entity_id == logic_id,
+        )
+        .order_by(MetadataLogicRevision.changed_at.desc())
+        .all()
+    )
+
+
+@metadata_router.get("/execution-logs")
+def get_metadata_execution_logs(
+    logic_code: Optional[str] = None,
+    status: Optional[str] = None,
+    limit: int = Query(default=100, le=1000),
+    db: Session = Depends(get_db),
+):
+    query = db.query(MetadataExecutionLog)
+    if logic_code:
+        query = query.filter(MetadataExecutionLog.logic_code == logic_code)
+    if status:
+        query = query.filter(MetadataExecutionLog.status == status.upper())
+    rows = query.order_by(MetadataExecutionLog.created_at.desc()).limit(limit).all()
+    return {
+        "count": len(rows),
+        "items": [
+            {
+                "id": r.id,
+                "run_id": r.run_id,
+                "logic_code": r.logic_code,
+                "status": r.status,
+                "result_value": float(r.result_value) if r.result_value is not None else None,
+                "error": r.error,
+                "created_at": r.created_at.isoformat() if r.created_at else None,
+            }
+            for r in rows
+        ],
+    }
+
+
+router.include_router(metadata_router)

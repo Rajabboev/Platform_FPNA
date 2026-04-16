@@ -39,6 +39,7 @@ class Settings(BaseSettings):
 
     # AI
     ANTHROPIC_API_KEY: str = ""
+    BUDGETING_V2_METADATA_ENABLED: bool = False
 
     @property
     def cors_origins_list(self) -> List[str]:

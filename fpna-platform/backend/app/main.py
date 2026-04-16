@@ -35,6 +35,12 @@ from app.models.coa_dimension import COADimension, BudgetingGroup, BSClass  # no
 from app.models.department import Department, DepartmentAssignment, DepartmentProductAccess  # noqa: F401
 from app.models.budget_plan import BudgetPlan, BudgetPlanGroup, BudgetPlanDetail, BudgetPlanApproval  # noqa: F401
 from app.models.scenario import BudgetScenario, ScenarioAdjustment, AIScenarioProjection  # noqa: F401
+from app.models.metadata_logic import (  # noqa: F401
+    MetadataLogicDriver,
+    MetadataLogicRule,
+    MetadataLogicRevision,
+    MetadataExecutionLog,
+)
 
 # Create database tables (including dwh_connections, etl_jobs, etl_runs)
 Base.metadata.create_all(bind=engine)
@@ -324,6 +330,92 @@ try:
             _dv = {c['name'] for c in insp.get_columns('driver_values')}
             if 'fpna_product_key' not in _dv:
                 _conn.execute(_text("ALTER TABLE driver_values ADD fpna_product_key NVARCHAR(50) NULL"))
+
+        if 'metadata_logic_drivers' not in insp.get_table_names():
+            _conn.execute(_text("""
+                CREATE TABLE metadata_logic_drivers (
+                    id INT IDENTITY(1,1) PRIMARY KEY,
+                    driver_id INT NOT NULL REFERENCES drivers(id) ON DELETE CASCADE,
+                    code NVARCHAR(100) NOT NULL,
+                    name NVARCHAR(255) NOT NULL,
+                    description NVARCHAR(MAX) NULL,
+                    version INT NOT NULL DEFAULT 1,
+                    is_active BIT DEFAULT 1,
+                    is_published BIT DEFAULT 0,
+                    scope_fields NVARCHAR(MAX) NULL,
+                    formula_expr NVARCHAR(MAX) NOT NULL,
+                    output_mode NVARCHAR(50) DEFAULT 'monthly_adjusted',
+                    rounding_mode NVARCHAR(50) DEFAULT 'HALF_UP',
+                    min_value DECIMAL(20,6) NULL,
+                    max_value DECIMAL(20,6) NULL,
+                    effective_from DATETIMEOFFSET NULL,
+                    effective_to DATETIMEOFFSET NULL,
+                    created_by_user_id INT NULL REFERENCES users(id),
+                    approved_by_user_id INT NULL REFERENCES users(id),
+                    published_at DATETIMEOFFSET NULL,
+                    created_at DATETIMEOFFSET DEFAULT CURRENT_TIMESTAMP,
+                    updated_at DATETIMEOFFSET NULL
+                )
+            """))
+            _conn.execute(_text("CREATE INDEX ix_mld_driver ON metadata_logic_drivers(driver_id, is_active, is_published)"))
+            _conn.execute(_text("CREATE INDEX ix_mld_code ON metadata_logic_drivers(code)"))
+
+        if 'metadata_logic_rules' not in insp.get_table_names():
+            _conn.execute(_text("""
+                CREATE TABLE metadata_logic_rules (
+                    id INT IDENTITY(1,1) PRIMARY KEY,
+                    code NVARCHAR(100) NOT NULL,
+                    name NVARCHAR(255) NOT NULL,
+                    version INT NOT NULL DEFAULT 1,
+                    priority INT NOT NULL DEFAULT 100,
+                    condition_expr NVARCHAR(MAX) NOT NULL,
+                    target_selector NVARCHAR(MAX) NULL,
+                    action_type NVARCHAR(50) NOT NULL DEFAULT 'set',
+                    action_payload NVARCHAR(MAX) NULL,
+                    stop_on_match BIT DEFAULT 0,
+                    is_active BIT DEFAULT 1,
+                    is_published BIT DEFAULT 0,
+                    created_by_user_id INT NULL REFERENCES users(id),
+                    approved_by_user_id INT NULL REFERENCES users(id),
+                    published_at DATETIMEOFFSET NULL,
+                    created_at DATETIMEOFFSET DEFAULT CURRENT_TIMESTAMP,
+                    updated_at DATETIMEOFFSET NULL
+                )
+            """))
+            _conn.execute(_text("CREATE INDEX ix_mlr_code ON metadata_logic_rules(code, is_active, is_published)"))
+
+        if 'metadata_logic_revisions' not in insp.get_table_names():
+            _conn.execute(_text("""
+                CREATE TABLE metadata_logic_revisions (
+                    id INT IDENTITY(1,1) PRIMARY KEY,
+                    entity_type NVARCHAR(30) NOT NULL,
+                    entity_id INT NOT NULL,
+                    version INT NOT NULL,
+                    change_type NVARCHAR(30) NOT NULL,
+                    before_payload NVARCHAR(MAX) NULL,
+                    after_payload NVARCHAR(MAX) NULL,
+                    changed_by_user_id INT NULL REFERENCES users(id),
+                    changed_at DATETIMEOFFSET DEFAULT CURRENT_TIMESTAMP
+                )
+            """))
+            _conn.execute(_text("CREATE INDEX ix_mlr_entity ON metadata_logic_revisions(entity_type, entity_id, version)"))
+
+        if 'metadata_execution_logs' not in insp.get_table_names():
+            _conn.execute(_text("""
+                CREATE TABLE metadata_execution_logs (
+                    id INT IDENTITY(1,1) PRIMARY KEY,
+                    run_id NVARCHAR(64) NOT NULL,
+                    logic_code NVARCHAR(100) NOT NULL,
+                    formula_used NVARCHAR(MAX) NULL,
+                    context_json NVARCHAR(MAX) NULL,
+                    result_value DECIMAL(20,6) NULL,
+                    status NVARCHAR(20) DEFAULT 'SUCCESS',
+                    error NVARCHAR(MAX) NULL,
+                    created_at DATETIMEOFFSET DEFAULT CURRENT_TIMESTAMP
+                )
+            """))
+            _conn.execute(_text("CREATE INDEX ix_mel_run ON metadata_execution_logs(run_id)"))
+            _conn.execute(_text("CREATE INDEX ix_mel_logic ON metadata_execution_logs(logic_code, status)"))
 
         # Segment-aware baselines (DWH slice per department)
         if 'baseline_data' in insp.get_table_names():

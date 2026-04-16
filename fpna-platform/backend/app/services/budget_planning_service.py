@@ -32,6 +32,8 @@ from app.models.user import User
 from app.models.driver import Driver, DriverValue, DriverGroupAssignment
 from app.services.connection_service import get_engine_for_connection
 from app.services.coa_product_taxonomy import resolve_coa_taxonomy, product_keys_for_legacy_budgeting_groups
+from app.services.metadata_rule_engine import MetadataRuleEngine
+from app.config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -63,6 +65,7 @@ class BudgetPlanningService:
     
     def __init__(self, db: Session):
         self.db = db
+        self.metadata_engine = MetadataRuleEngine(db)
     
     # =========================================================================
     # STEP 1: Initialize - Ingest and Calculate Baseline
@@ -813,6 +816,7 @@ class BudgetPlanningService:
         if driver_rate is not None:
             driver_type = None
             monthly_rates = None
+            metadata_logic = None
 
             if driver_code:
                 driver_record = self.db.query(Driver).filter(
@@ -820,6 +824,8 @@ class BudgetPlanningService:
                 ).first()
                 if driver_record:
                     driver_type = driver_record.driver_type.value if driver_record.driver_type else None
+                    if settings.BUDGETING_V2_METADATA_ENABLED:
+                        metadata_logic = self.metadata_engine.get_active_driver_logic(driver_record.id)
 
                     # Look up per-month DriverValue entries for this driver + group
                     dv_q = self.db.query(DriverValue).filter(
@@ -835,8 +841,25 @@ class BudgetPlanningService:
                     if dv_rows:
                         monthly_rates = {dv.month: dv.value for dv in dv_rows}
 
-            group.apply_driver(driver_rate, driver_type=driver_type,
-                               monthly_rates=monthly_rates)
+            if settings.BUDGETING_V2_METADATA_ENABLED and metadata_logic:
+                for month_idx, m in enumerate(MONTHS, 1):
+                    baseline = getattr(group, f'baseline_{m}') or Decimal(0)
+                    rate_value = monthly_rates.get(month_idx, driver_rate) if monthly_rates else driver_rate
+                    context = {
+                        "baseline": baseline,
+                        "rate": rate_value or 0,
+                        "month": month_idx,
+                        "product_key": group.fpna_product_key,
+                        "budgeting_group_id": group.budgeting_group_id,
+                    }
+                    adjusted = self.metadata_engine.evaluate_driver(metadata_logic, context)
+                    setattr(group, f'adjusted_{m}', adjusted)
+                group.recalculate_totals()
+                group.driver_rate = driver_rate
+                group.driver_type = driver_type
+            else:
+                group.apply_driver(driver_rate, driver_type=driver_type,
+                                   monthly_rates=monthly_rates)
             group.driver_code = driver_code
             group.driver_name = driver_name or driver_code
         
@@ -1041,8 +1064,30 @@ class BudgetPlanningService:
                     dv_rows = []
                 monthly_rates = {dv.month: dv.value for dv in dv_rows} if dv_rows else None
 
-                group.apply_driver(rate, driver_type=driver_type,
-                                   monthly_rates=monthly_rates)
+                if settings.BUDGETING_V2_METADATA_ENABLED:
+                    metadata_logic = self.metadata_engine.get_active_driver_logic(driver.id)
+                else:
+                    metadata_logic = None
+
+                if metadata_logic:
+                    for month_idx, m in enumerate(MONTHS, 1):
+                        baseline = getattr(group, f'baseline_{m}') or Decimal(0)
+                        rate_value = monthly_rates.get(month_idx, rate) if monthly_rates else rate
+                        context = {
+                            "baseline": baseline,
+                            "rate": rate_value or 0,
+                            "month": month_idx,
+                            "product_key": group.fpna_product_key,
+                            "budgeting_group_id": group.budgeting_group_id,
+                        }
+                        adjusted = self.metadata_engine.evaluate_driver(metadata_logic, context)
+                        setattr(group, f'adjusted_{m}', adjusted)
+                    group.driver_rate = rate
+                    group.driver_type = driver_type
+                    group.recalculate_totals()
+                else:
+                    group.apply_driver(rate, driver_type=driver_type,
+                                       monthly_rates=monthly_rates)
                 group.driver_code = driver.code
                 group.driver_name = driver.name_en
                 group.last_edited_by_user_id = user_id

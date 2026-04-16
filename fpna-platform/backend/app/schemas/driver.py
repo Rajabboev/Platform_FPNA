@@ -213,3 +213,81 @@ class SpreadAnalysis(BaseModel):
     interest_income: Optional[Decimal] = None
     interest_expense: Optional[Decimal] = None
     net_interest: Decimal
+
+
+class MetadataLogicDriverBase(BaseModel):
+    driver_id: int
+    code: str = Field(..., max_length=100)
+    name: str = Field(..., max_length=255)
+    description: Optional[str] = None
+    scope_fields: Optional[str] = None
+    formula_expr: str
+    output_mode: str = "monthly_adjusted"
+    rounding_mode: str = "HALF_UP"
+    min_value: Optional[Decimal] = None
+    max_value: Optional[Decimal] = None
+    is_active: bool = True
+
+
+class MetadataLogicDriverCreate(MetadataLogicDriverBase):
+    pass
+
+
+class MetadataLogicDriverUpdate(BaseModel):
+    name: Optional[str] = None
+    description: Optional[str] = None
+    scope_fields: Optional[str] = None
+    formula_expr: Optional[str] = None
+    output_mode: Optional[str] = None
+    rounding_mode: Optional[str] = None
+    min_value: Optional[Decimal] = None
+    max_value: Optional[Decimal] = None
+    is_active: Optional[bool] = None
+
+
+class MetadataLogicDriverResponse(MetadataLogicDriverBase):
+    id: int
+    version: int
+    is_published: bool
+    created_by_user_id: Optional[int] = None
+    approved_by_user_id: Optional[int] = None
+    published_at: Optional[datetime] = None
+    created_at: datetime
+    updated_at: Optional[datetime] = None
+
+    class Config:
+        from_attributes = True
+
+
+class MetadataFormulaValidationRequest(BaseModel):
+    formula_expr: str
+    sample_context: Optional[dict] = None
+
+
+class MetadataFormulaValidationResponse(BaseModel):
+    is_valid: bool
+    message: str
+    sample_result: Optional[Decimal] = None
+
+
+class MetadataPublishResponse(BaseModel):
+    id: int
+    code: str
+    version: int
+    is_published: bool
+    published_at: Optional[datetime] = None
+
+
+class MetadataRevisionResponse(BaseModel):
+    id: int
+    entity_type: str
+    entity_id: int
+    version: int
+    change_type: str
+    before_payload: Optional[str] = None
+    after_payload: Optional[str] = None
+    changed_by_user_id: Optional[int] = None
+    changed_at: datetime
+
+    class Config:
+        from_attributes = True

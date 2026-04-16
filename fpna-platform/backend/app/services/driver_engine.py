@@ -21,6 +21,8 @@ from app.models.driver import (
 )
 from app.models.snapshot import BaselineBudget
 from app.models.coa import Account, AccountClass, AccountMapping
+from app.config import settings
+from app.services.metadata_formula_engine import MetadataFormulaEngine
 
 logger = logging.getLogger(__name__)
 
@@ -32,6 +34,7 @@ class DriverEngine:
 
     def __init__(self, db: Session):
         self.db = db
+        self.metadata_formula_engine = MetadataFormulaEngine()
 
     def get_driver_value(
         self,
@@ -247,6 +250,16 @@ class DriverEngine:
     ) -> Optional[Decimal]:
         """Execute calculation formula safely"""
         try:
+            if settings.BUDGETING_V2_METADATA_ENABLED:
+                return self.metadata_formula_engine.evaluate(
+                    formula,
+                    {
+                        "balance": balance,
+                        "driver": driver_value or 0,
+                        "rate": driver_value or 0,
+                    },
+                    rounding_places=2,
+                )
             local_vars = {
                 "balance": float(balance),
                 "driver": float(driver_value) if driver_value else 0,
