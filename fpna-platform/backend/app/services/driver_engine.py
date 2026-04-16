@@ -11,7 +11,14 @@ from typing import List, Optional, Dict, Tuple
 import uuid
 import logging
 
-from app.models.driver import Driver, DriverValue, DriverCalculationLog, GoldenRule, DriverType
+from app.models.driver import (
+    Driver,
+    DriverValue,
+    DriverCalculationLog,
+    GoldenRule,
+    DriverType,
+    DriverGroupAssignment,
+)
 from app.models.snapshot import BaselineBudget
 from app.models.coa import Account, AccountClass, AccountMapping
 
@@ -516,7 +523,7 @@ class DriverEngine:
                 "name_uz": "Kredit portfeli o'sish stavkasi",
                 "driver_type": DriverType.GROWTH_RATE,
                 "source_account_pattern": "1",
-                "default_value": Decimal("15.0"),
+                "default_value": Decimal("8.0"),
                 "unit": "%",
                 "is_system": True
             },
@@ -526,10 +533,30 @@ class DriverEngine:
                 "name_uz": "Depozit o'sish stavkasi",
                 "driver_type": DriverType.GROWTH_RATE,
                 "source_account_pattern": "20",
-                "default_value": Decimal("12.0"),
+                "default_value": Decimal("6.0"),
                 "unit": "%",
                 "is_system": True
             },
+            # --- BS portfolio volume (use growth_rate on balance baselines, not yield/cost) ---
+            {"code": "GROWTH_CASH_LIQUID", "name_en": "Cash & liquid assets — volume growth", "name_uz": "Naqd likvid aktivlar hajmi", "driver_type": DriverType.GROWTH_RATE, "default_value": Decimal("4.0"), "unit": "%", "is_system": True},
+            {"code": "GROWTH_SECURITIES", "name_en": "Securities & investments — volume growth", "name_uz": "Qimmatli qog'ozlar hajmi", "driver_type": DriverType.GROWTH_RATE, "default_value": Decimal("3.0"), "unit": "%", "is_system": True},
+            {"code": "GROWTH_RESERVES_BS", "name_en": "Reserves (BS) — balance movement", "name_uz": "Zaxiralar balansi", "driver_type": DriverType.GROWTH_RATE, "default_value": Decimal("2.0"), "unit": "%", "is_system": True},
+            {"code": "GROWTH_FIXED_ASSETS", "name_en": "Fixed assets — net growth", "name_uz": "Asosiy vositalar o'sishi", "driver_type": DriverType.GROWTH_RATE, "default_value": Decimal("3.0"), "unit": "%", "is_system": True},
+            {"code": "GROWTH_ASSETS_OTHER", "name_en": "Other assets — volume growth", "name_uz": "Boshqa aktivlar", "driver_type": DriverType.GROWTH_RATE, "default_value": Decimal("2.0"), "unit": "%", "is_system": True},
+            {"code": "GROWTH_LIABS_CARDS", "name_en": "Card liabilities — volume growth", "name_uz": "Karta majburiyatlari", "driver_type": DriverType.GROWTH_RATE, "default_value": Decimal("4.0"), "unit": "%", "is_system": True},
+            {"code": "GROWTH_LIABS_CBU", "name_en": "CBU / regulatory liabilities — growth", "name_uz": "MKK majburiyatlari", "driver_type": DriverType.GROWTH_RATE, "default_value": Decimal("2.0"), "unit": "%", "is_system": True},
+            {"code": "GROWTH_LIABS_OTHER", "name_en": "Other liabilities — growth", "name_uz": "Boshqa majburiyatlar", "driver_type": DriverType.GROWTH_RATE, "default_value": Decimal("3.0"), "unit": "%", "is_system": True},
+            {"code": "GROWTH_CAPITAL", "name_en": "Capital & equity — growth", "name_uz": "Kapital o'sishi", "driver_type": DriverType.GROWTH_RATE, "default_value": Decimal("3.0"), "unit": "%", "is_system": True},
+            {"code": "GROWTH_OFF_BALANCE", "name_en": "Off-balance — exposure growth", "name_uz": "Blansdan tashqari", "driver_type": DriverType.GROWTH_RATE, "default_value": Decimal("0.0"), "unit": "%", "is_system": True},
+            # --- P&L flow lines: inflation_rate = baseline_flow × (1 + r/100) ---
+            {"code": "PL_GROWTH_REV_INTEREST", "name_en": "P&L — interest income growth", "name_uz": "Foiz daromadi o'sishi", "driver_type": DriverType.INFLATION_RATE, "default_value": Decimal("2.5"), "unit": "%", "is_system": True},
+            {"code": "PL_GROWTH_REV_NONINT", "name_en": "P&L — non-interest income growth", "name_uz": "Foizsiz daromad", "driver_type": DriverType.INFLATION_RATE, "default_value": Decimal("3.0"), "unit": "%", "is_system": True},
+            {"code": "PL_GROWTH_EXP_INTEREST", "name_en": "P&L — interest expense growth", "name_uz": "Foiz xarajati", "driver_type": DriverType.INFLATION_RATE, "default_value": Decimal("2.5"), "unit": "%", "is_system": True},
+            {"code": "PL_GROWTH_EXP_NONINT", "name_en": "P&L — non-interest expense growth", "name_uz": "Foizsiz xarajat", "driver_type": DriverType.INFLATION_RATE, "default_value": Decimal("3.0"), "unit": "%", "is_system": True},
+            {"code": "PL_GROWTH_OPEX", "name_en": "P&L — OPEX growth", "name_uz": "Operatsion xarajatlar", "driver_type": DriverType.INFLATION_RATE, "default_value": Decimal("4.0"), "unit": "%", "is_system": True},
+            {"code": "PL_GROWTH_TAX", "name_en": "P&L — tax charge growth", "name_uz": "Soliqlar", "driver_type": DriverType.INFLATION_RATE, "default_value": Decimal("1.0"), "unit": "%", "is_system": True},
+            {"code": "PL_GROWTH_CAPEX_PNL", "name_en": "P&L — depreciation / amort. growth", "name_uz": "Amortizatsiya", "driver_type": DriverType.INFLATION_RATE, "default_value": Decimal("2.0"), "unit": "%", "is_system": True},
+            {"code": "PL_FLAT_UNCLASSIFIED", "name_en": "Unclassified P&L/BS — no change", "name_uz": "Tasniflanmagan", "driver_type": DriverType.INFLATION_RATE, "default_value": Decimal("0.0"), "unit": "%", "is_system": True},
         ]
 
         created = 0
@@ -540,7 +567,75 @@ class DriverEngine:
                 created += 1
 
         self.db.commit()
+        self._sync_legacy_growth_defaults()
         return created
+
+    def _sync_legacy_growth_defaults(self) -> None:
+        """Keep loan/deposit portfolio growth defaults in a sane range (avoids runaway bulk-apply)."""
+        for code, val in (("GROWTH_LOANS", Decimal("8.0")), ("GROWTH_DEPOSITS", Decimal("6.0"))):
+            row = self.db.query(Driver).filter(Driver.code == code).first()
+            if row:
+                row.default_value = val
+        self.db.commit()
+
+    def seed_fpna_product_driver_assignments(self) -> dict:
+        """
+        Map each fpna_product_key to one default driver with the correct *driver_type*
+        for plan group baselines (BS = growth on balances; P&L = inflation on flows).
+
+        Replaces existing rows where fpna_product_key IS NOT NULL.
+        """
+        mapping = [
+            ("LOANS", "GROWTH_LOANS"),
+            ("DEPOSITS", "GROWTH_DEPOSITS"),
+            ("RESERVES", "GROWTH_RESERVES_BS"),
+            ("CASH_LIQUID", "GROWTH_CASH_LIQUID"),
+            ("SECURITIES_INVEST", "GROWTH_SECURITIES"),
+            ("FIXED_ASSETS", "GROWTH_FIXED_ASSETS"),
+            ("ASSETS_OTHER", "GROWTH_ASSETS_OTHER"),
+            ("LIABS_CARDS", "GROWTH_LIABS_CARDS"),
+            ("LIABS_CBU", "GROWTH_LIABS_CBU"),
+            ("LIABS_OTHER", "GROWTH_LIABS_OTHER"),
+            ("REV_INTEREST", "PL_GROWTH_REV_INTEREST"),
+            ("REV_NONINTEREST", "PL_GROWTH_REV_NONINT"),
+            ("EXP_INTEREST", "PL_GROWTH_EXP_INTEREST"),
+            ("EXP_NONINTEREST", "PL_GROWTH_EXP_NONINT"),
+            ("OPEX", "PL_GROWTH_OPEX"),
+            ("TAX", "PL_GROWTH_TAX"),
+            ("CAPEX_PNL", "PL_GROWTH_CAPEX_PNL"),
+            ("CAPITAL", "GROWTH_CAPITAL"),
+            ("OFF_BALANCE", "GROWTH_OFF_BALANCE"),
+            ("UNCLASSIFIED", "PL_FLAT_UNCLASSIFIED"),
+        ]
+        deleted = (
+            self.db.query(DriverGroupAssignment)
+            .filter(DriverGroupAssignment.fpna_product_key.isnot(None))
+            .delete(synchronize_session=False)
+        )
+        created = 0
+        for product_key, driver_code in mapping:
+            dr = self.db.query(Driver).filter(Driver.code == driver_code, Driver.is_active == True).first()
+            if not dr:
+                logger.warning("seed_fpna_product_driver_assignments: missing driver %s", driver_code)
+                continue
+            self.db.add(
+                DriverGroupAssignment(
+                    driver_id=dr.id,
+                    fpna_product_key=product_key,
+                    budgeting_group_id=None,
+                    is_default=True,
+                    is_active=True,
+                )
+            )
+            created += 1
+        self.db.commit()
+        return {"assignments_deleted": deleted, "assignments_created": created}
+
+    def seed_fpna_planning_baseline(self) -> dict:
+        """Drivers + per-product assignments (run after COA / before bulk apply)."""
+        n_new = self.seed_default_drivers()
+        assign = self.seed_fpna_product_driver_assignments()
+        return {"new_drivers_created": n_new, **assign}
 
     def seed_golden_rules(self) -> int:
         """Seed default golden rules"""

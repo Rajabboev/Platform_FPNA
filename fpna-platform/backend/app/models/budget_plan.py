@@ -29,6 +29,7 @@ class BudgetPlanStatus(str, enum.Enum):
     SUBMITTED = "submitted"
     DEPT_APPROVED = "dept_approved"
     CFO_APPROVED = "cfo_approved"
+    CEO_APPROVED = "ceo_approved"
     REJECTED = "rejected"
     EXPORTED = "exported"
 
@@ -37,6 +38,7 @@ class ApprovalLevel(str, enum.Enum):
     """Approval levels"""
     DEPT_HEAD = "dept_head"
     CFO = "cfo"
+    CEO = "ceo"
 
 
 class ApprovalAction(str, enum.Enum):
@@ -87,6 +89,11 @@ class BudgetPlan(Base):
     cfo_approved_by_user_id = Column(Integer, ForeignKey('users.id', ondelete='NO ACTION'))
     cfo_approval_comment = Column(Text)
     
+    # CEO approval
+    ceo_approved_at = Column(DateTime(timezone=True))
+    ceo_approved_by_user_id = Column(Integer, ForeignKey('users.id', ondelete='NO ACTION'))
+    ceo_approval_comment = Column(Text)
+
     # Rejection tracking
     rejected_at = Column(DateTime(timezone=True))
     rejected_by_user_id = Column(Integer, ForeignKey('users.id', ondelete='NO ACTION'))
@@ -141,8 +148,10 @@ class BudgetPlanGroup(Base):
     # Parent plan
     plan_id = Column(Integer, ForeignKey('budget_plans.id', ondelete='CASCADE'), nullable=False, index=True)
     
-    # Group identification - 4 level hierarchy
-    budgeting_group_id = Column(Integer, index=True)  # From budgeting_groups table
+    # Group identification — FP&A product (primary); legacy budgeting group optional
+    fpna_product_key = Column(String(50), index=True, nullable=True)
+    fpna_product_label_en = Column(String(200), nullable=True)
+    budgeting_group_id = Column(Integer, index=True, nullable=True)  # Legacy CBU budgeting group
     budgeting_group_name = Column(String(500))
     bs_flag = Column(Integer, index=True)  # Level 1: 1=Assets, 2=Liabilities, 3=Capital
     bs_class_name = Column(String(255))
@@ -186,6 +195,7 @@ class BudgetPlanGroup(Base):
     # Driver applied
     driver_code = Column(String(50), index=True)
     driver_name = Column(String(255))
+    driver_type = Column(String(50))  # yield_rate, cost_rate, growth_rate, etc.
     driver_rate = Column(Numeric(10, 4))  # e.g., 5.5 for 5.5%
     
     # Editing
@@ -203,48 +213,120 @@ class BudgetPlanGroup(Base):
     # Relationships
     plan = relationship("BudgetPlan", back_populates="groups")
     details = relationship("BudgetPlanDetail", back_populates="group", cascade="all, delete-orphan")
+    last_edited_by_user = relationship("User", foreign_keys=[last_edited_by_user_id])
     
     __table_args__ = (
         Index('ix_plan_group_bg', 'plan_id', 'budgeting_group_id'),
+        Index('ix_plan_group_product', 'plan_id', 'fpna_product_key'),
     )
 
     def __repr__(self):
-        return f"<BudgetPlanGroup(plan={self.plan_id}, group={self.budgeting_group_id})>"
+        return f"<BudgetPlanGroup(plan={self.plan_id}, product={self.fpna_product_key}, bg={self.budgeting_group_id})>"
     
+    # Balance-sheet bs_flag values (Assets, Liabilities, Capital, Off-balance)
+    # For these, the "total" is the year-end (December) balance, not the 12-month sum.
+    # P&L accounts (income/expense flows) use the annual sum.
+    BS_BALANCE_FLAGS = {1, 2, 3, 4, 9}
+
     def recalculate_totals(self):
-        """Recalculate totals from monthly values"""
-        self.baseline_total = sum([
+        """
+        Recalculate totals from monthly values.
+
+        FP&A Rule:
+        - Balance-sheet groups (bs_flag 1-4): total = December year-end balance.
+          Summing 12 monthly balances is meaningless and inflates figures 12x.
+        - P&L / flow groups (other bs_flag): total = annual sum of monthly flows.
+        """
+        bs_monthly = [
             self.baseline_jan or 0, self.baseline_feb or 0, self.baseline_mar or 0,
             self.baseline_apr or 0, self.baseline_may or 0, self.baseline_jun or 0,
             self.baseline_jul or 0, self.baseline_aug or 0, self.baseline_sep or 0,
             self.baseline_oct or 0, self.baseline_nov or 0, self.baseline_dec or 0,
-        ])
-        self.adjusted_total = sum([
+        ]
+        adj_monthly = [
             self.adjusted_jan or 0, self.adjusted_feb or 0, self.adjusted_mar or 0,
             self.adjusted_apr or 0, self.adjusted_may or 0, self.adjusted_jun or 0,
             self.adjusted_jul or 0, self.adjusted_aug or 0, self.adjusted_sep or 0,
             self.adjusted_oct or 0, self.adjusted_nov or 0, self.adjusted_dec or 0,
-        ])
+        ]
+
+        if (self.bs_flag or 0) in self.BS_BALANCE_FLAGS:
+            # Year-end balance = December value
+            self.baseline_total = bs_monthly[11]   # December (index 11)
+            self.adjusted_total = adj_monthly[11]
+        else:
+            # Annual flow = sum of monthly amounts
+            self.baseline_total = sum(bs_monthly)
+            self.adjusted_total = sum(adj_monthly)
+
         self.variance = self.adjusted_total - self.baseline_total
         if self.baseline_total and self.baseline_total != 0:
             self.variance_pct = (self.variance / self.baseline_total) * 100
     
-    def apply_driver(self, rate: Decimal):
-        """Apply a driver rate to all monthly values"""
-        multiplier = Decimal(1) + (rate / Decimal(100))
-        self.adjusted_jan = (self.baseline_jan or 0) * multiplier
-        self.adjusted_feb = (self.baseline_feb or 0) * multiplier
-        self.adjusted_mar = (self.baseline_mar or 0) * multiplier
-        self.adjusted_apr = (self.baseline_apr or 0) * multiplier
-        self.adjusted_may = (self.baseline_may or 0) * multiplier
-        self.adjusted_jun = (self.baseline_jun or 0) * multiplier
-        self.adjusted_jul = (self.baseline_jul or 0) * multiplier
-        self.adjusted_aug = (self.baseline_aug or 0) * multiplier
-        self.adjusted_sep = (self.baseline_sep or 0) * multiplier
-        self.adjusted_oct = (self.baseline_oct or 0) * multiplier
-        self.adjusted_nov = (self.baseline_nov or 0) * multiplier
-        self.adjusted_dec = (self.baseline_dec or 0) * multiplier
+    MONTH_NAMES = ['jan', 'feb', 'mar', 'apr', 'may', 'jun',
+                   'jul', 'aug', 'sep', 'oct', 'nov', 'dec']
+
+    def apply_driver(self, rate: Decimal, driver_type: str = None,
+                     monthly_rates: dict = None):
+        """
+        Apply a driver rate using FP&A-correct formulas.
+
+        FP&A Logic:
+        - growth_rate:    projected_balance = baseline * (1 + rate/100)
+                          Applied to balance-sheet items (loans, deposits, etc.)
+                          Rate = expected YoY portfolio growth (e.g. 30%)
+        - yield_rate:     projected_income = avg_balance * (rate/100) / 12
+                          Applied to P&L income accounts.
+                          baseline here represents the avg balance earning income.
+        - cost_rate:      projected_expense = avg_balance * (rate/100) / 12
+                          Applied to P&L expense/interest-expense accounts.
+        - provision_rate: provision = balance * (rate/100)
+                          Applied to provision/impairment accounts.
+        - inflation_rate: adjusted = baseline * (1 + rate/100)
+                          General cost inflation adjustment.
+        - custom/other:   adjusted = baseline * (1 + rate/100)
+                          Flat percentage change on baseline.
+
+        Args:
+            rate: Driver rate as percentage (e.g. 30 for 30%). Fallback for all months.
+            driver_type: Driver type string from DriverType enum.
+            monthly_rates: Optional {1: Decimal, ...} per-month override rates.
+        """
+        for month_idx, m in enumerate(self.MONTH_NAMES, 1):
+            baseline = getattr(self, f'baseline_{m}') or Decimal(0)
+            r = Decimal(str(monthly_rates.get(month_idx, rate))) if monthly_rates else rate
+
+            if driver_type == 'growth_rate':
+                # Balance-sheet projection: project next-year balance
+                # Each month's projected balance = baseline × (1 + growth%)
+                adjusted = baseline * (Decimal(1) + r / Decimal(100))
+
+            elif driver_type == 'yield_rate':
+                # P&L income from earning assets: monthly_income = balance × annual_yield / 12
+                # baseline = average balance of the earning asset
+                adjusted = baseline * r / Decimal(100) / Decimal(12)
+
+            elif driver_type == 'cost_rate':
+                # P&L funding cost: monthly_expense = liability_balance × annual_cost / 12
+                # baseline = average balance of the interest-bearing liability
+                adjusted = baseline * r / Decimal(100) / Decimal(12)
+
+            elif driver_type == 'provision_rate':
+                # Provision / impairment charge: provision = loan_balance × provision_rate
+                adjusted = baseline * r / Decimal(100)
+
+            elif driver_type == 'inflation_rate':
+                # Cost inflation: adjusted = baseline × (1 + inflation%)
+                adjusted = baseline * (Decimal(1) + r / Decimal(100))
+
+            else:
+                # headcount, fx_rate, custom: flat percentage change
+                adjusted = baseline * (Decimal(1) + r / Decimal(100))
+
+            setattr(self, f'adjusted_{m}', adjusted.quantize(Decimal('0.01')))
+
         self.driver_rate = rate
+        self.driver_type = driver_type
         self.recalculate_totals()
 
 

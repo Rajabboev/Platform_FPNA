@@ -81,12 +81,13 @@ starlette==0.35.1             # ASGI framework (FastAPI dependency)
 # python-json-logger==2.0.7   # JSON logging
 
 # ============================================
-# ML/AI Libraries (Install when needed)
+# ML/AI Libraries
 # ============================================
-# scikit-learn==1.4.0         # Machine learning
-# xgboost==2.0.3              # Gradient boosting
-# prophet==1.1.5              # Time series forecasting
+scikit-learn==1.4.0           # Machine learning (baseline regression)
+prophet==1.1.5                # Time series forecasting (AI baseline)
+# xgboost==2.0.3              # Gradient boosting (optional)
 # mlflow==2.9.2               # ML experiment tracking
+anthropic>=0.40.0            # Anthropic Claude API (Sonnet 4.6)
 # langchain==0.1.0            # LLM framework
 # openai==1.7.2               # OpenAI API
 

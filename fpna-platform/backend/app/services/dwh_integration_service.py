@@ -226,6 +226,16 @@ class DWHIntegrationService:
             
             where_clause = " AND ".join(where_parts)
             
+            from app.services.balans_signed_balance import (
+                sql_signed_balance_row,
+                sql_signed_balance_sum,
+            )
+
+            _signed_uzs = sql_signed_balance_sum("OSTATALL", "PRIZNALL")
+            _signed_val = sql_signed_balance_sum("OSTATALLVAL", "PRIZNALL")
+            _row_uzs = sql_signed_balance_row("OSTATALL", "PRIZNALL")
+            _row_val = sql_signed_balance_row("OSTATALLVAL", "PRIZNALL")
+
             # Build query - aggregate by account/date/currency across branches
             if aggregate_branches:
                 query = f"""
@@ -233,8 +243,8 @@ class DWHIntegrationService:
                         CURDATE as snapshot_date,
                         KODBALANS as account_code,
                         KODVALUTA as currency_code,
-                        SUM(ISNULL(OSTATALL, 0)) as balance_uzs,
-                        SUM(ISNULL(OSTATALLVAL, 0)) as balance_currency,
+                        {_signed_uzs} as balance_uzs,
+                        {_signed_val} as balance_currency,
                         SUM(ISNULL(OSTATALL_IN, 0)) as incoming_balance_uzs,
                         SUM(ISNULL(OSTATALL_DT, 0)) as debit_turnover,
                         SUM(ISNULL(OSTATALL_CT, 0)) as credit_turnover,
@@ -251,8 +261,8 @@ class DWHIntegrationService:
                         KODBALANS as account_code,
                         KODVALUTA as currency_code,
                         OTDELENIE as branch_code,
-                        ISNULL(OSTATALL, 0) as balance_uzs,
-                        ISNULL(OSTATALLVAL, 0) as balance_currency,
+                        {_row_uzs} as balance_uzs,
+                        {_row_val} as balance_currency,
                         ISNULL(OSTATALL_IN, 0) as incoming_balance_uzs,
                         ISNULL(OSTATALL_DT, 0) as debit_turnover,
                         ISNULL(OSTATALL_CT, 0) as credit_turnover

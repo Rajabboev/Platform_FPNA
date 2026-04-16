@@ -12,6 +12,7 @@ from pydantic import BaseModel, Field
 
 from app.database import get_db
 from app.services.dwh_integration_service import DWHIntegrationService, ensure_audit_trail_table
+from app.services.balans_signed_balance import sql_signed_balance_sum, sql_signed_balance_row
 from app.services.alert_engine import AlertEngine
 from app.models.dwh_connection import DWHConnection
 from app.models.snapshot import BalanceSnapshot, BaselineBudget, SnapshotImportLog
@@ -250,9 +251,11 @@ def get_balans_summary(
         if not dwh_engine:
             raise HTTPException(status_code=404, detail="Connection not found")
         
+        _tot_uzs = sql_signed_balance_sum("OSTATALL", "PRIZNALL")
+        _cur_uzs = sql_signed_balance_sum("OSTATALL", "PRIZNALL")
         with dwh_engine.connect() as conn:
-            # Get summary statistics
-            result = conn.execute(text("""
+            # Get summary statistics (signed OSTATALL via PRIZNALL)
+            result = conn.execute(text(f"""
                 SELECT 
                     COUNT(*) as total_rows,
                     COUNT(DISTINCT KODBALANS) as unique_accounts,
@@ -261,7 +264,7 @@ def get_balans_summary(
                     COUNT(DISTINCT OTDELENIE) as unique_branches,
                     MIN(CURDATE) as min_date,
                     MAX(CURDATE) as max_date,
-                    SUM(ISNULL(OSTATALL, 0)) as total_balance_uzs
+                    {_tot_uzs} as total_balance_uzs
                 FROM dbo.balans_ato
             """))
             summary = result.fetchone()
@@ -275,11 +278,11 @@ def get_balans_summary(
             dates = [str(row[0]) for row in result.fetchall()]
             
             # Get currency distribution
-            result = conn.execute(text("""
+            result = conn.execute(text(f"""
                 SELECT 
                     KODVALUTA,
                     COUNT(DISTINCT KODBALANS) as account_count,
-                    SUM(ISNULL(OSTATALL, 0)) as total_balance
+                    {_cur_uzs} as total_balance
                 FROM dbo.balans_ato
                 GROUP BY KODVALUTA
                 ORDER BY total_balance DESC
@@ -352,7 +355,9 @@ def preview_balans_data(
             params["account_code"] = f"{account_code}%"
         
         where_clause = " AND ".join(where_parts)
-        
+        _row_uzs = sql_signed_balance_row("OSTATALL", "PRIZNALL")
+        _row_val = sql_signed_balance_row("OSTATALLVAL", "PRIZNALL")
+
         with dwh_engine.connect() as conn:
             result = conn.execute(text(f"""
                 SELECT TOP (:limit)
@@ -360,14 +365,14 @@ def preview_balans_data(
                     CURDATE as snapshot_date,
                     KODVALUTA as currency_code,
                     OTDELENIE as branch_code,
-                    OSTATALL as balance_uzs,
-                    OSTATALLVAL as balance_currency,
+                    {_row_uzs} as balance_uzs,
+                    {_row_val} as balance_currency,
                     OSTATALL_IN as incoming_balance,
                     OSTATALL_DT as debit_turnover,
                     OSTATALL_CT as credit_turnover
                 FROM dbo.balans_ato
                 WHERE {where_clause}
-                ORDER BY CURDATE DESC, OSTATALL DESC
+                ORDER BY CURDATE DESC, {_row_uzs} DESC
             """), params)
             
             rows = []

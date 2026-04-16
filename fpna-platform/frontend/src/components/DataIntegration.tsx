@@ -135,14 +135,14 @@ const TabButton: React.FC<{
 }> = ({ active, onClick, icon: Icon, label, badge }) => (
   <button
     onClick={onClick}
-    className={`flex items-center gap-2 px-4 py-2.5 text-sm font-medium rounded-lg transition-all ${
-      active ? 'bg-blue-600 text-white shadow-sm' : 'text-gray-600 hover:bg-gray-100'
+    className={`flex items-center gap-2 px-4 py-2 text-sm font-medium rounded-md transition-colors ${
+      active ? 'bg-white text-indigo-700 shadow-sm' : 'text-gray-600 hover:text-gray-900'
     }`}
   >
     <Icon className="w-4 h-4" />
     {label}
     {badge !== undefined && badge > 0 && (
-      <span className={`ml-1 px-1.5 py-0.5 text-xs rounded-full ${active ? 'bg-blue-500 text-white' : 'bg-gray-200 text-gray-600'}`}>
+      <span className={`ml-1 px-1.5 py-0.5 text-xs rounded-full ${active ? 'bg-indigo-100 text-indigo-700' : 'bg-gray-200 text-gray-600'}`}>
         {badge}
       </span>
     )}
@@ -198,11 +198,16 @@ export const DataIntegrationPage: React.FC = () => {
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-bold text-gray-900">Data Integration Hub</h1>
-          <p className="text-gray-500 mt-1">Manage DWH connections, data ingestion, templates, and budget exports</p>
+          <h1 className="text-2xl font-bold text-gray-900 flex items-center gap-2">
+            <Database className="w-6 h-6 text-indigo-600" />
+            Data Integration Hub
+          </h1>
+          <p className="text-gray-500 mt-1 text-sm">
+            Central control for DWH connections, data pipelines, templates, and budget exports
+          </p>
         </div>
         <div className="flex items-center gap-2">
-          <select className="border rounded-lg px-3 py-2 text-sm">
+          <select className="border rounded-lg px-3 py-2 text-sm bg-white">
             <option value={2026}>FY 2026</option>
             <option value={2025}>FY 2025</option>
           </select>
@@ -214,12 +219,12 @@ export const DataIntegrationPage: React.FC = () => {
       {success && <Alert type="success" message={success} onClose={() => setSuccess(null)} />}
 
       {/* Tabs */}
-      <div className="flex gap-2 border-b border-gray-200 pb-4">
+      <div className="flex gap-1 bg-gray-100 rounded-lg p-1">
         <TabButton active={activeTab === 'overview'} onClick={() => setActiveTab('overview')} icon={TrendingUp} label="Overview" />
         <TabButton active={activeTab === 'connections'} onClick={() => setActiveTab('connections')} icon={Plug} label="Connections" />
         <TabButton active={activeTab === 'ingestion'} onClick={() => setActiveTab('ingestion')} icon={Download} label="Data Ingestion" />
-        <TabButton active={activeTab === 'templates'} onClick={() => setActiveTab('templates')} icon={LayoutTemplate} label="Templates & Assignments" />
-        <TabButton active={activeTab === 'egress'} onClick={() => setActiveTab('egress')} icon={Upload} label="Export to DWH" />
+        <TabButton active={activeTab === 'templates'} onClick={() => setActiveTab('templates')} icon={LayoutTemplate} label="Templates" />
+        <TabButton active={activeTab === 'egress'} onClick={() => setActiveTab('egress')} icon={Upload} label="Export" />
       </div>
 
       {/* Tab Content */}

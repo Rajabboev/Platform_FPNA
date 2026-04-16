@@ -1,6 +1,10 @@
 """Application configuration settings"""
-from pydantic_settings import BaseSettings
+from pathlib import Path
+from pydantic_settings import BaseSettings, SettingsConfigDict
 from typing import List
+
+# Always resolve .env relative to this file's directory (backend/)
+_ENV_FILE = str(Path(__file__).resolve().parent.parent / ".env")
 
 
 class Settings(BaseSettings):
@@ -33,6 +37,9 @@ class Settings(BaseSettings):
     ALLOWED_EXTENSIONS: str = "xlsx,xls,csv"
     UPLOAD_FOLDER: str = "./uploads"
 
+    # AI
+    ANTHROPIC_API_KEY: str = ""
+
     @property
     def cors_origins_list(self) -> List[str]:
         """Parse CORS origins into list"""
@@ -43,9 +50,12 @@ class Settings(BaseSettings):
         """Parse allowed extensions into list"""
         return [ext.strip() for ext in self.ALLOWED_EXTENSIONS.split(',')]
 
-    class Config:
-        env_file = ".env"
-        case_sensitive = True
+    model_config = SettingsConfigDict(
+        env_file=_ENV_FILE,
+        case_sensitive=True,
+        extra="ignore",
+        env_ignore_empty=True,
+    )
 
 
 settings = Settings()

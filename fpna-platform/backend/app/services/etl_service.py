@@ -230,9 +230,13 @@ def run_etl_job(job: ETLJob, db_session) -> ETLRun:
         src_table = _quoted_table(src_schema, job.source_table, src_dialect)
         tgt_table = _quoted_table(tgt_schema, job.target_table, tgt_dialect)
 
-        # Extract
+        # Extract via SQLAlchemy (avoid pd.read_sql + pandas 3 / SQLAlchemy 2 edge cases)
         read_sql = f"SELECT * FROM {src_table}"
-        df = pd.read_sql(read_sql, source_engine)
+        with source_engine.connect() as sa_conn:
+            result = sa_conn.execute(text(read_sql))
+            cols = list(result.keys())
+            rows = result.fetchall()
+            df = pd.DataFrame(rows, columns=cols) if cols else pd.DataFrame()
         rows_extracted = len(df)
 
         if df.empty:

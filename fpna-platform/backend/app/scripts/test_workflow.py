@@ -143,8 +143,10 @@ class WorkflowTester:
             
             result = self.service.create_department_plans(
                 fiscal_year=self.fiscal_year,
-                baseline_data=baseline_data,
-                user_id=user.id
+                user_id=user.id,
+                baseline_data=baseline_data if baseline_data.get("status") == "success" else None,
+                source_years=None,
+                method="simple_average",
             )
             
             self.print_result("Department plans created", True, 

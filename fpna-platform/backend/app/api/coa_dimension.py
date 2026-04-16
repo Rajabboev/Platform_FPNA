@@ -25,6 +25,12 @@ from app.services.coa_import_service import (
     get_accounts_by_budgeting_group,
     search_accounts,
 )
+from app.services.coa_product_taxonomy import (
+    TAXONOMY_BY_KEY,
+    resolve_coa_taxonomy,
+    taxonomy_definitions,
+)
+from app.services.coa_import_service import sync_fpna_product_columns
 from app.config import settings
 
 router = APIRouter(prefix="/coa-dimension", tags=["coa-dimension"])
@@ -46,7 +52,7 @@ async def import_coa_dimension(
     Expected format:
     - Sheet with header row at index 1
     - Columns: COA_CODE, COA_NAME, BS_FLAG, BS_NAME, BS_GROUP, GROUP_NAME,
-               BUDGETING_GROUPS, BUDGETING_GROUPS_NAME, P_L_flag_name, etc.
+               P_L fields, etc. FP&A product buckets are derived and stored (fpna_product_*).
     """
     if not file.filename:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No filename provided")
@@ -105,23 +111,33 @@ def get_hierarchy(db: Session = Depends(get_db)):
     Get COA hierarchy for tree view
     
     Returns hierarchy organized by:
-    BS Class -> Budgeting Group -> Accounts
+    BS Class -> BS group -> FP&A product -> accounts
     """
     return get_coa_hierarchy(db)
+
+
+@router.post("/rebuild-fpna-products")
+def rebuild_fpna_products(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+):
+    """Recompute and persist fpna_product_* on all coa_dimension rows (after upgrade or rule changes)."""
+    n = sync_fpna_product_columns(db)
+    return {"status": "success", "rows_updated": n}
 
 
 @router.get("/accounts")
 def list_accounts(
     query: str = Query(None, description="Search term (code or name)"),
     bs_flag: int = Query(None, description="Filter by BS class (1=Assets, 2=Liabilities, 3=Capital, 9=Off-balance)"),
-    budgeting_group: int = Query(None, description="Filter by budgeting group ID"),
+    product_key: str = Query(None, description="Filter by FP&A product key (e.g. DEPOSITS)"),
     skip: int = Query(0, ge=0),
     limit: int = Query(100, ge=1, le=2000),
     db: Session = Depends(get_db)
 ):
     """Search and list COA accounts with filters"""
-    if query or bs_flag is not None or budgeting_group is not None:
-        return search_accounts(db, query, bs_flag, budgeting_group, limit)
+    if query or bs_flag is not None or product_key is not None:
+        return search_accounts(db, query, bs_flag, product_key, limit)
     
     # Default: return paginated list
     accounts = db.query(COADimension).filter(
@@ -143,10 +159,13 @@ def list_accounts(
                 'bs_name': acc.bs_name,
                 'bs_group': acc.bs_group,
                 'group_name': acc.group_name,
-                'budgeting_groups': acc.budgeting_groups,
-                'budgeting_groups_name': acc.budgeting_groups_name,
                 'p_l_flag_name': acc.p_l_flag_name,
                 'has_pl_impact': acc.has_pl_impact,
+                'fpna_product_key': acc.fpna_product_key,
+                'fpna_product_label_en': acc.fpna_product_label_en,
+                'fpna_product_pillar': acc.fpna_product_pillar,
+                'fpna_display_group': acc.fpna_display_group,
+                **resolve_coa_taxonomy(acc),
             }
             for acc in accounts
         ]
@@ -173,8 +192,10 @@ def get_account(coa_code: str, db: Session = Depends(get_db)):
         'bs_name': account.bs_name,
         'bs_group': account.bs_group,
         'group_name': account.group_name,
-        'budgeting_groups': account.budgeting_groups,
-        'budgeting_groups_name': account.budgeting_groups_name,
+        'fpna_product_key': account.fpna_product_key,
+        'fpna_product_label_en': account.fpna_product_label_en,
+        'fpna_product_pillar': account.fpna_product_pillar,
+        'fpna_display_group': account.fpna_display_group,
         'mkb_bs_group': account.mkb_bs_group,
         'bs_cbu_item_name': account.bs_cbu_item_name,
         'asset_liability_flag_1_name': account.asset_liability_flag_1_name,
@@ -190,6 +211,7 @@ def get_account(coa_code: str, db: Session = Depends(get_db)):
         'has_pl_impact': account.has_pl_impact,
         'validation_status': account.validation_status,
         'created_at': account.created_at.isoformat() if account.created_at else None,
+        **resolve_coa_taxonomy(account),
     }
 
 
@@ -198,7 +220,7 @@ def list_budgeting_groups(
     category: str = Query(None, description="Filter by category (ASSET, LIABILITY, CAPITAL, OFF_BALANCE)"),
     db: Session = Depends(get_db)
 ):
-    """List all budgeting groups with account counts and BS class info"""
+    """Legacy CBU budgeting groups (lookup table). Prefer /product-taxonomy for FP&A planning."""
     from sqlalchemy import func as sql_func
     
     query = db.query(BudgetingGroup).filter(BudgetingGroup.is_active == True)
@@ -277,6 +299,108 @@ def list_bs_classes(db: Session = Depends(get_db)):
     ]
 
 
+@router.get("/product-taxonomy")
+def get_product_taxonomy():
+    """
+    FP&A product buckets derived from coa_dimension (Loans, Deposits, P&L slices, etc.).
+    Stable keys for filters and reporting.
+    """
+    return {"items": taxonomy_definitions()}
+
+
+@router.get("/product-summary")
+def get_product_summary(db: Session = Depends(get_db)):
+    """Account counts per product_key (uses stored fpna_product_key when set)."""
+    rows = db.query(COADimension).filter(COADimension.is_active == True).all()
+    counts: dict = {}
+    for acc in rows:
+        key = resolve_coa_taxonomy(acc)["product_key"]
+        counts[key] = counts.get(key, 0) + 1
+    ordered = sorted(counts.items(), key=lambda x: (-x[1], x[0]))
+    unclassified = TAXONOMY_BY_KEY["UNCLASSIFIED"]
+    return {
+        "total_accounts": len(rows),
+        "by_product": [
+            {
+                "product_key": k,
+                "count": c,
+                "label_en": TAXONOMY_BY_KEY.get(k, unclassified).label_en,
+                "pillar": TAXONOMY_BY_KEY.get(k, unclassified).pillar,
+            }
+            for k, c in ordered
+        ],
+    }
+
+
+@router.get("/accounts/by-product/{product_key}")
+def list_accounts_by_product(
+    product_key: str,
+    skip: int = Query(0, ge=0),
+    limit: int = Query(200, ge=1, le=2000),
+    db: Session = Depends(get_db),
+):
+    """All COA codes classified into the given product_key (scans active dimension)."""
+    pk = product_key.strip().upper()
+    valid = {t["key"] for t in taxonomy_definitions()}
+    if pk not in valid:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Unknown product_key. Use GET /coa-dimension/product-taxonomy for keys.",
+        )
+    has_null = (
+        db.query(COADimension.id)
+        .filter(COADimension.is_active == True, COADimension.fpna_product_key.is_(None))
+        .limit(1)
+        .first()
+    )
+    if not has_null:
+        q = (
+            db.query(COADimension)
+            .filter(COADimension.is_active == True, COADimension.fpna_product_key == pk)
+            .order_by(COADimension.coa_code)
+        )
+        rows = q.offset(skip).limit(limit).all()
+        matched = [
+            {
+                "id": acc.id,
+                "coa_code": acc.coa_code,
+                "coa_name": acc.coa_name,
+                "bs_flag": acc.bs_flag,
+                "p_l_flag_name": acc.p_l_flag_name,
+                "fpna_product_key": acc.fpna_product_key,
+                "fpna_product_label_en": acc.fpna_product_label_en,
+                **resolve_coa_taxonomy(acc),
+            }
+            for acc in rows
+        ]
+        return {"product_key": pk, "count_returned": len(matched), "accounts": matched}
+
+    q = db.query(COADimension).filter(COADimension.is_active == True).order_by(COADimension.coa_code)
+    matched = []
+    for acc in q:
+        tax = resolve_coa_taxonomy(acc)
+        if tax["product_key"] != pk:
+            continue
+        if skip > 0:
+            skip -= 1
+            continue
+        if len(matched) >= limit:
+            break
+        matched.append(
+            {
+                "id": acc.id,
+                "coa_code": acc.coa_code,
+                "coa_name": acc.coa_name,
+                "bs_flag": acc.bs_flag,
+                "p_l_flag_name": acc.p_l_flag_name,
+                "fpna_product_key": acc.fpna_product_key,
+                "fpna_product_label_en": acc.fpna_product_label_en,
+                **tax,
+            }
+        )
+    return {"product_key": pk, "count_returned": len(matched), "accounts": matched}
+
+
 @router.get("/stats")
 def get_coa_stats(db: Session = Depends(get_db)):
     """Get COA dimension statistics"""
@@ -292,15 +416,14 @@ def get_coa_stats(db: Session = Depends(get_db)):
         COADimension.is_active == True
     ).group_by(COADimension.bs_flag, COADimension.bs_name).all()
     
-    by_budgeting_group = db.query(
-        COADimension.budgeting_groups,
-        COADimension.budgeting_groups_name,
-        func.count(COADimension.id)
+    by_product = db.query(
+        COADimension.fpna_product_key,
+        func.count(COADimension.id),
     ).filter(
         COADimension.is_active == True,
-        COADimension.budgeting_groups.isnot(None)
-    ).group_by(COADimension.budgeting_groups, COADimension.budgeting_groups_name).all()
-    
+        COADimension.fpna_product_key.isnot(None),
+    ).group_by(COADimension.fpna_product_key).all()
+
     pl_accounts = db.query(func.count(COADimension.id)).filter(
         COADimension.is_active == True,
         COADimension.p_l_flag.isnot(None)
@@ -313,8 +436,12 @@ def get_coa_stats(db: Session = Depends(get_db)):
             {'bs_flag': bs_flag, 'bs_name': bs_name, 'count': count}
             for bs_flag, bs_name, count in by_bs_flag
         ],
-        'by_budgeting_group': [
-            {'group_id': group_id, 'group_name': group_name, 'count': count}
-            for group_id, group_name, count in sorted(by_budgeting_group, key=lambda x: x[0] or 0)
+        'by_product': [
+            {
+                'product_key': pk,
+                'label_en': TAXONOMY_BY_KEY.get(pk, TAXONOMY_BY_KEY['UNCLASSIFIED']).label_en,
+                'count': cnt,
+            }
+            for pk, cnt in sorted(by_product, key=lambda x: (-x[1], x[0] or ''))
         ],
     }

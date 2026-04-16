@@ -101,7 +101,8 @@ class DriverValue(Base):
     
     account_code = Column(String(5), index=True)
     business_unit_code = Column(String(20), index=True)
-    budgeting_group_id = Column(Integer, index=True)  # For group-level drivers
+    budgeting_group_id = Column(Integer, index=True, nullable=True)  # Legacy CBU budgeting group
+    fpna_product_key = Column(String(50), index=True, nullable=True)  # FP&A product bucket
     bs_group = Column(Integer, index=True)  # 3-digit BS group code
     currency = Column(String(3), default="UZS")
     
@@ -173,8 +174,9 @@ class DriverGroupAssignment(Base):
     id = Column(Integer, primary_key=True, index=True)
     
     driver_id = Column(Integer, ForeignKey("drivers.id", ondelete="CASCADE"), nullable=False, index=True)
-    budgeting_group_id = Column(Integer, nullable=False, index=True)  # Links to BudgetingGroup.group_id
-    
+    budgeting_group_id = Column(Integer, nullable=True, index=True)  # Legacy BudgetingGroup.group_id
+    fpna_product_key = Column(String(50), nullable=True, index=True)  # FP&A product bucket
+
     is_default = Column(Boolean, default=False)  # Default driver for this group
     is_active = Column(Boolean, default=True)
     
@@ -185,11 +187,12 @@ class DriverGroupAssignment(Base):
     driver = relationship("Driver")
     
     __table_args__ = (
-        Index('ix_driver_group_assignment', 'driver_id', 'budgeting_group_id', unique=True),
+        Index('ix_dga_driver_bg', 'driver_id', 'budgeting_group_id'),
+        Index('ix_dga_driver_product', 'driver_id', 'fpna_product_key'),
     )
 
     def __repr__(self):
-        return f"<DriverGroupAssignment(driver={self.driver_id}, group={self.budgeting_group_id})>"
+        return f"<DriverGroupAssignment(driver={self.driver_id}, product={self.fpna_product_key}, bg={self.budgeting_group_id})>"
 
 
 class GoldenRule(Base):

@@ -5,8 +5,12 @@ Currency and FX Rate API endpoints
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 from typing import List, Optional
-from datetime import date
+from datetime import date, datetime, timedelta
 from decimal import Decimal
+import httpx
+import logging
+
+logger = logging.getLogger(__name__)
 
 from app.database import get_db
 from app.models.currency import Currency, CurrencyRate, BudgetFXRate
@@ -46,35 +50,6 @@ def create_currency(
 
     currency = Currency(**data.model_dump())
     db.add(currency)
-    db.commit()
-    db.refresh(currency)
-    return currency
-
-
-@router.get("/{code}", response_model=CurrencyResponse)
-def get_currency(code: str, db: Session = Depends(get_db)):
-    """Get currency by code"""
-    currency = db.query(Currency).filter(Currency.code == code.upper()).first()
-    if not currency:
-        raise HTTPException(status_code=404, detail="Currency not found")
-    return currency
-
-
-@router.patch("/{code}", response_model=CurrencyResponse)
-def update_currency(
-    code: str,
-    data: CurrencyUpdate,
-    db: Session = Depends(get_db)
-):
-    """Update currency"""
-    currency = db.query(Currency).filter(Currency.code == code.upper()).first()
-    if not currency:
-        raise HTTPException(status_code=404, detail="Currency not found")
-
-    update_data = data.model_dump(exclude_unset=True)
-    for field, value in update_data.items():
-        setattr(currency, field, value)
-
     db.commit()
     db.refresh(currency)
     return currency
@@ -361,5 +336,201 @@ def approve_budget_rates(
     return {"approved": count}
 
 
+@rates_router.post("/fetch-cbu")
+def fetch_cbu_rates(
+    target_date: Optional[date] = None,
+    db: Session = Depends(get_db),
+):
+    """
+    Fetch exchange rates from Central Bank of Uzbekistan (cbu.uz).
+    Returns all rates for the given date (defaults to today).
+    """
+    if target_date is None:
+        target_date = date.today()
+
+    # CBU JSON API – returns all rates for the given date
+    url = f"https://cbu.uz/en/arkhiv-kursov-valyut/json/"
+    params = {}
+    # For a specific date, use the date-filter URL
+    if target_date != date.today():
+        # CBU API accepts date in YYYY-MM-DD format via 'all' endpoint
+        url = f"https://cbu.uz/en/arkhiv-kursov-valyut/json/all/{target_date.strftime('%Y-%m-%d')}/"
+
+    try:
+        with httpx.Client(timeout=30.0, verify=False) as client:
+            response = client.get(url, params=params)
+            response.raise_for_status()
+            data = response.json()
+    except httpx.HTTPError as e:
+        raise HTTPException(status_code=502, detail=f"CBU API request failed: {str(e)}")
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"CBU API error: {str(e)}")
+
+    if not isinstance(data, list) or len(data) == 0:
+        raise HTTPException(status_code=404, detail=f"No rates from CBU for {target_date}")
+
+    # Ensure base currency UZS exists
+    if not db.query(Currency).filter(Currency.code == "UZS").first():
+        db.add(Currency(
+            code="UZS", name_en="Uzbekistani Sum", name_uz="O'zbek so'mi",
+            symbol="сўм", decimal_places=2, is_active=True,
+            is_base_currency=True, display_order=0,
+        ))
+        db.flush()
+
+    service = FXService(db)
+    saved = 0
+    currencies_created = 0
+    rates_result = []
+
+    for item in data:
+        try:
+            ccy = item.get("Ccy", "").upper()
+            ccy_name_en = item.get("CcyNm_EN", ccy)
+            ccy_name_uz = item.get("CcyNm_UZ", "")
+            rate_str = item.get("Rate", "0")
+            nominal_str = item.get("Nominal", "1")
+            diff_str = item.get("Diff", "0")
+            date_str = item.get("Date", "")
+
+            # Auto-create currency if it doesn't exist
+            existing_ccy = db.query(Currency).filter(Currency.code == ccy).first()
+            if not existing_ccy:
+                db.add(Currency(
+                    code=ccy, name_en=ccy_name_en, name_uz=ccy_name_uz,
+                    symbol=ccy, decimal_places=2, is_active=True,
+                    is_base_currency=False, display_order=100,
+                ))
+                currencies_created += 1
+            elif not existing_ccy.name_en or existing_ccy.name_en == ccy:
+                existing_ccy.name_en = ccy_name_en
+                existing_ccy.name_uz = ccy_name_uz
+            db.flush()
+
+            # Parse rate and nominal
+            rate_value = Decimal(str(rate_str))
+            nominal = int(nominal_str) if nominal_str else 1
+            effective_rate = rate_value / Decimal(str(nominal)) if nominal != 1 else rate_value
+
+            # Parse date (DD.MM.YYYY)
+            if date_str:
+                rate_date = datetime.strptime(date_str, "%d.%m.%Y").date()
+            else:
+                rate_date = target_date
+
+            # Save rate to DB
+            service.save_rate(
+                from_currency=ccy,
+                to_currency="UZS",
+                rate=effective_rate,
+                rate_date=rate_date,
+                rate_source="CBU",
+                is_official=True,
+            )
+            saved += 1
+            rates_result.append({
+                "currency": ccy,
+                "name": ccy_name_en,
+                "name_uz": ccy_name_uz,
+                "rate": float(effective_rate),
+                "nominal": nominal,
+                "diff": diff_str,
+                "date": str(rate_date),
+            })
+        except Exception as e:
+            logger.warning("Failed to parse CBU rate for %s: %s", item.get("Ccy", "?"), e)
+            continue
+
+    db.commit()
+
+    return {
+        "fetched": saved,
+        "currencies_created": currencies_created,
+        "date": str(target_date),
+        "rates": rates_result,
+    }
+
+
+@rates_router.post("/fetch-cbu-range")
+def fetch_cbu_rates_range(
+    start_date: date = Query(...),
+    end_date: date = Query(...),
+    db: Session = Depends(get_db),
+):
+    """Fetch CBU rates for a date range (max 90 days)."""
+    delta = (end_date - start_date).days
+    if delta > 90:
+        raise HTTPException(status_code=400, detail="Max range is 90 days")
+    if delta < 0:
+        raise HTTPException(status_code=400, detail="end_date must be after start_date")
+
+    total_saved = 0
+    current = start_date
+    while current <= end_date:
+        url = f"https://cbu.uz/en/arkhiv-kursov-valyut/json/all/{current.strftime('%Y-%m-%d')}/"
+        try:
+            with httpx.Client(timeout=30.0, verify=False) as client:
+                response = client.get(url)
+                response.raise_for_status()
+                data = response.json()
+        except Exception:
+            current += timedelta(days=1)
+            continue
+
+        if isinstance(data, list):
+            service = FXService(db)
+            for item in data:
+                try:
+                    ccy = item.get("Ccy", "").upper()
+                    rate_value = Decimal(str(item.get("Rate", "0")))
+                    nominal = int(item.get("Nominal", "1") or "1")
+                    effective_rate = rate_value / Decimal(str(nominal)) if nominal != 1 else rate_value
+                    date_str = item.get("Date", "")
+                    rate_date = datetime.strptime(date_str, "%d.%m.%Y").date() if date_str else current
+
+                    service.save_rate(
+                        from_currency=ccy, to_currency="UZS",
+                        rate=effective_rate, rate_date=rate_date,
+                        rate_source="CBU", is_official=True,
+                    )
+                    total_saved += 1
+                except Exception:
+                    continue
+
+        current += timedelta(days=1)
+
+    return {"fetched": total_saved, "start_date": str(start_date), "end_date": str(end_date)}
+
+
 router.include_router(rates_router)
 router.include_router(budget_rates_router)
+
+
+# /{code} routes must come AFTER include_router to avoid shadowing /rates and /budget-rates
+@router.get("/{code}", response_model=CurrencyResponse)
+def get_currency(code: str, db: Session = Depends(get_db)):
+    """Get currency by code"""
+    currency = db.query(Currency).filter(Currency.code == code.upper()).first()
+    if not currency:
+        raise HTTPException(status_code=404, detail="Currency not found")
+    return currency
+
+
+@router.patch("/{code}", response_model=CurrencyResponse)
+def update_currency(
+    code: str,
+    data: CurrencyUpdate,
+    db: Session = Depends(get_db)
+):
+    """Update currency"""
+    currency = db.query(Currency).filter(Currency.code == code.upper()).first()
+    if not currency:
+        raise HTTPException(status_code=404, detail="Currency not found")
+
+    update_data = data.model_dump(exclude_unset=True)
+    for field, value in update_data.items():
+        setattr(currency, field, value)
+
+    db.commit()
+    db.refresh(currency)
+    return currency

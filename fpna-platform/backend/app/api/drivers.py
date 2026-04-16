@@ -71,6 +71,16 @@ def seed_drivers(db: Session = Depends(get_db)):
     return {"created": created}
 
 
+@router.post("/seed-fpna-planning", response_model=dict)
+def seed_fpna_planning_defaults(db: Session = Depends(get_db)):
+    """
+    Seed extended drivers + replace fpna_product_key driver assignments.
+    Run after COA import; then re-initialize or bulk-apply drivers on draft plans.
+    """
+    engine = DriverEngine(db)
+    return engine.seed_fpna_planning_baseline()
+
+
 values_router = APIRouter(prefix="/values", tags=["Driver Values"])
 
 
@@ -227,6 +237,140 @@ def approve_driver_values(
 
     db.commit()
     return {"approved": count}
+
+
+@values_router.get("/actuals/{driver_code}")
+def get_driver_actuals_from_dwh(
+    driver_code: str,
+    fiscal_year: int,
+    db: Session = Depends(get_db),
+):
+    """
+    Calculate actual driver rates from DWH baseline_data.
+
+    Uses source_account_pattern (balance) and target_account_pattern (P&L)
+    to compute monthly rates:
+      yield_rate / cost_rate  = target_turnover / source_balance * 12 * 100
+      provision_rate          = target_turnover / source_balance * 100
+      growth_rate             = (bal[m] - bal[m-1]) / bal[m-1] * 100
+    Falls back to stored driver_values if no baseline_data exists.
+    """
+    from app.models.baseline import BaselineData
+
+    driver = db.query(Driver).filter(Driver.code == driver_code).first()
+    if not driver:
+        raise HTTPException(status_code=404, detail="Driver not found")
+
+    src_pattern = driver.source_account_pattern
+    tgt_pattern = driver.target_account_pattern
+    dtype = driver.driver_type.value if driver.driver_type else ""
+
+    monthly: dict = {m: None for m in range(1, 13)}
+
+    # ── Helper: aggregate baseline_data balances by month ────────────
+    def _agg_balance(pattern: str, year: int) -> dict:
+        """Sum balance_uzs for accounts matching pattern, by month."""
+        rows = (
+            db.query(
+                BaselineData.fiscal_month,
+                func.sum(BaselineData.balance_uzs).label("total"),
+            )
+            .filter(
+                BaselineData.fiscal_year == year,
+                BaselineData.account_code.like(f"{pattern}%"),
+            )
+            .group_by(BaselineData.fiscal_month)
+            .all()
+        )
+        return {r.fiscal_month: float(r.total or 0) for r in rows}
+
+    def _agg_turnover(pattern: str, year: int) -> dict:
+        """Sum credit_turnover for P&L accounts matching pattern, by month."""
+        rows = (
+            db.query(
+                BaselineData.fiscal_month,
+                func.sum(BaselineData.credit_turnover).label("ct"),
+                func.sum(BaselineData.debit_turnover).label("dt"),
+            )
+            .filter(
+                BaselineData.fiscal_year == year,
+                BaselineData.account_code.like(f"{pattern}%"),
+            )
+            .group_by(BaselineData.fiscal_month)
+            .all()
+        )
+        # For income accounts (4xx) credit > debit; for expense (5xx) debit > credit
+        result = {}
+        for r in rows:
+            ct = float(r.ct or 0)
+            dt = float(r.dt or 0)
+            # P&L flow: income = credit - debit; expense = debit - credit
+            if pattern and pattern[0] in ("4", "5"):
+                result[r.fiscal_month] = abs(ct - dt)
+            else:
+                result[r.fiscal_month] = ct
+        return result
+
+    # ── Calculate based on driver type ───────────────────────────────
+    if src_pattern:
+        src_bal = _agg_balance(src_pattern, fiscal_year)
+
+        if dtype in ("yield_rate", "cost_rate") and tgt_pattern:
+            tgt_flow = _agg_turnover(tgt_pattern, fiscal_year)
+            for m in range(1, 13):
+                bal = src_bal.get(m, 0)
+                flow = tgt_flow.get(m, 0)
+                if bal and bal != 0:
+                    monthly[m] = round(flow / bal * 12 * 100, 6)
+
+        elif dtype == "provision_rate" and tgt_pattern:
+            tgt_flow = _agg_turnover(tgt_pattern, fiscal_year)
+            for m in range(1, 13):
+                bal = src_bal.get(m, 0)
+                flow = tgt_flow.get(m, 0)
+                if bal and bal != 0:
+                    monthly[m] = round(flow / bal * 100, 6)
+
+        elif dtype == "growth_rate":
+            prev_bal = _agg_balance(src_pattern, fiscal_year - 1)
+            for m in range(1, 13):
+                curr = src_bal.get(m, 0)
+                # Compare to prior month (or Dec of prior year for Jan)
+                if m == 1:
+                    prev = prev_bal.get(12, 0)
+                else:
+                    prev = src_bal.get(m - 1, 0)
+                if prev and prev != 0:
+                    monthly[m] = round((curr - prev) / abs(prev) * 100, 6)
+
+        elif dtype == "inflation_rate":
+            # Inflation is typically an externally-set value, fall through to DB
+            pass
+
+    # If no baseline_data available, fall back to stored driver_values with value_type='actual'
+    has_data = any(v is not None for v in monthly.values())
+    if not has_data:
+        stored = (
+            db.query(DriverValue)
+            .filter(
+                DriverValue.driver_id == driver.id,
+                DriverValue.fiscal_year == fiscal_year,
+            )
+            .all()
+        )
+        for v in stored:
+            if v.month and monthly[v.month] is None:
+                monthly[v.month] = float(v.value)
+
+    return {
+        "driver_id": driver.id,
+        "driver_code": driver.code,
+        "driver_name": driver.name_en,
+        "driver_type": dtype,
+        "fiscal_year": fiscal_year,
+        "source": "baseline_data" if has_data else "driver_values",
+        "monthly_values": monthly,
+    }
 
 
 router.include_router(values_router)
@@ -475,6 +619,44 @@ def delete_driver(code: str, db: Session = Depends(get_db)):
 group_assignments_router = APIRouter(prefix="/group-assignments", tags=["Driver Group Assignments"])
 
 
+@group_assignments_router.get("/by-product/{product_key}")
+def get_drivers_for_product(
+    product_key: str,
+    db: Session = Depends(get_db),
+):
+    """Drivers allowed for an FP&A product bucket (Loans, Deposits, …)."""
+    pk = (product_key or "").strip().upper()
+    assignments = db.query(DriverGroupAssignment).filter(
+        DriverGroupAssignment.fpna_product_key == pk,
+        DriverGroupAssignment.is_active == True,
+    ).all()
+
+    result = []
+    for assignment in assignments:
+        driver = assignment.driver
+        result.append({
+            'assignment_id': assignment.id,
+            'driver_id': driver.id,
+            'driver_code': driver.code,
+            'driver_name': driver.name_en,
+            'driver_type': driver.driver_type.value if driver.driver_type else None,
+            'description': driver.description,
+            'formula': driver.formula,
+            'formula_description': driver.formula_description,
+            'default_value': float(driver.default_value) if driver.default_value else None,
+            'min_value': float(driver.min_value) if driver.min_value else None,
+            'max_value': float(driver.max_value) if driver.max_value else None,
+            'unit': driver.unit,
+            'is_default': assignment.is_default,
+        })
+
+    return {
+        'fpna_product_key': pk,
+        'drivers': result,
+        'default_driver': next((d for d in result if d['is_default']), None),
+    }
+
+
 @group_assignments_router.get("/by-group/{group_id}")
 def get_drivers_for_group(
     group_id: int,
@@ -518,19 +700,22 @@ def get_drivers_for_group(
 @group_assignments_router.get("")
 def list_all_group_assignments(
     budgeting_group_id: Optional[int] = None,
+    fpna_product_key: Optional[str] = None,
     driver_id: Optional[int] = None,
     db: Session = Depends(get_db),
 ):
-    """List all driver-group assignments with optional filters"""
+    """List all driver-group / driver-product assignments with optional filters"""
     query = db.query(DriverGroupAssignment).filter(DriverGroupAssignment.is_active == True)
-    
-    if budgeting_group_id:
+
+    if budgeting_group_id is not None:
         query = query.filter(DriverGroupAssignment.budgeting_group_id == budgeting_group_id)
+    if fpna_product_key:
+        query = query.filter(DriverGroupAssignment.fpna_product_key == fpna_product_key.strip().upper())
     if driver_id:
         query = query.filter(DriverGroupAssignment.driver_id == driver_id)
-    
+
     assignments = query.all()
-    
+
     result = []
     for a in assignments:
         result.append({
@@ -539,6 +724,7 @@ def list_all_group_assignments(
             'driver_code': a.driver.code,
             'driver_name': a.driver.name_en,
             'budgeting_group_id': a.budgeting_group_id,
+            'fpna_product_key': a.fpna_product_key,
             'is_default': a.is_default,
             'created_at': a.created_at.isoformat() if a.created_at else None,
         })

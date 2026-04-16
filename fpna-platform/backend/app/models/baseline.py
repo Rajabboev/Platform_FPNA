@@ -12,7 +12,8 @@ from app.database import Base
 class BaselineData(Base):
     """
     Raw snapshot data imported from DWH balans_ato
-    Stores monthly ending balances for baseline calculation
+    Stores monthly balances for baseline calculation.
+    Ingestion uses signed amounts: PRIZNALL=1 -> +OSTATALL, PRIZNALL=0 -> -OSTATALL (see balans_signed_balance).
     """
     __tablename__ = "baseline_data"
     
@@ -41,6 +42,9 @@ class BaselineData(Base):
     
     # Branch aggregation
     branch_code = Column(String(10), default='ALL')
+
+    # DWH business segment (Retail / Corporate / …) when source is segmented; NULL = unsegmented row
+    segment_key = Column(String(100), nullable=True, index=True)
     
     # Metadata
     created_at = Column(DateTime, default=datetime.utcnow)
@@ -48,6 +52,7 @@ class BaselineData(Base):
     __table_args__ = (
         Index('ix_baseline_data_account_period', 'account_code', 'fiscal_year', 'fiscal_month'),
         Index('ix_baseline_data_year_month', 'fiscal_year', 'fiscal_month'),
+        Index('ix_baseline_data_year_segment', 'fiscal_year', 'segment_key'),
     )
 
 
@@ -174,4 +179,69 @@ class BudgetPlanned(Base):
     __table_args__ = (
         Index('ix_budget_planned_year_account', 'fiscal_year', 'account_code'),
         Index('ix_budget_planned_status', 'status'),
+    )
+
+
+class ApprovedBudgetFact(Base):
+    """
+    Account-level approved budget in DWH-source grain.
+
+    Mirrors the source table format (1 row per coa_code + month) so it can be
+    joined directly to actuals for fact-vs-plan analysis and ML pipelines.
+
+    Populated during export and also written to DWH as year_budget_approved_detail.
+    """
+    __tablename__ = "approved_budget_fact"
+
+    id = Column(Integer, primary_key=True, index=True)
+
+    # Same grain as DWH source (balans_ato)
+    coa_code = Column(String(10), nullable=False, index=True)
+    fiscal_year = Column(Integer, nullable=False, index=True)
+    fiscal_month = Column(Integer, nullable=False)  # 1-12
+    currency = Column(String(3), default='UZS')
+
+    # Amounts
+    baseline_amount = Column(Numeric(22, 2), default=0)
+    adjusted_amount = Column(Numeric(22, 2), default=0)
+    variance = Column(Numeric(22, 2), default=0)
+
+    # COA hierarchy context
+    coa_name = Column(String(1000))
+    bs_flag = Column(Integer)
+    bs_class_name = Column(String(255))
+    bs_group = Column(String(10))
+    bs_group_name = Column(String(255))
+    budgeting_group_id = Column(Integer, index=True)
+    budgeting_group_name = Column(String(500))
+
+    # Department
+    department_code = Column(String(50), index=True)
+    department_name = Column(String(255))
+
+    # Driver info
+    driver_code = Column(String(50))
+    driver_rate = Column(Numeric(10, 4))
+    driver_type = Column(String(50))
+
+    # Version / batch
+    version = Column(Integer, default=1)
+    plan_status = Column(String(30))
+    export_batch_id = Column(String(50), index=True)
+
+    # Approval chain timestamps
+    submitted_at = Column(DateTime(timezone=True))
+    dept_approved_at = Column(DateTime(timezone=True))
+    cfo_approved_at = Column(DateTime(timezone=True))
+    ceo_approved_at = Column(DateTime(timezone=True))
+    exported_at = Column(DateTime(timezone=True))
+
+    # Metadata
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    __table_args__ = (
+        Index('ix_abf_coa_year_month', 'coa_code', 'fiscal_year', 'fiscal_month'),
+        Index('ix_abf_year_dept', 'fiscal_year', 'department_code'),
+        Index('ix_abf_year_group', 'fiscal_year', 'budgeting_group_id'),
+        Index('ix_abf_batch', 'export_batch_id'),
     )

@@ -13,6 +13,7 @@ from datetime import datetime
 import logging
 
 from app.models.coa_dimension import COADimension, BudgetingGroup, BSClass
+from app.services.coa_product_taxonomy import classify_coa_row, resolve_coa_taxonomy
 
 logger = logging.getLogger(__name__)
 
@@ -39,8 +40,6 @@ COLUMN_MAPPING = {
     'Asset_Liability_FLAG_1_Name': 'asset_liability_flag_1_name',
     'Asset_Liability_FLAG_2': 'asset_liability_flag_2',
     'Asset_Liability_FLAG_2_Name': 'asset_liability_flag_2_name',
-    'BUDGETING_GROUPS': 'budgeting_groups',
-    'BUDGETING_GROUPS_NAME': 'budgeting_groups_name',
     'P_L_flag': 'p_l_flag',
     'P_L_flag_name': 'p_l_flag_name',
     'P_L_group': 'p_l_group',
@@ -113,7 +112,7 @@ def import_coa_from_excel(
                         value = row.get(excel_col)
                         if pd.notna(value):
                             # Convert numeric fields
-                            if model_field in ('bs_flag', 'bs_flag_1', 'bs_group', 'budgeting_groups',
+                            if model_field in ('bs_flag', 'bs_flag_1', 'bs_group',
                                               'p_l_flag', 'p_l_group', 'p_l_sub_group',
                                               'mkb_bs_group_flag', 'bs_cbu_sub_item_group',
                                               'bs_cbu_sub_item', 'asset_liability_flag_1',
@@ -141,15 +140,16 @@ def import_coa_from_excel(
         
         db.commit()
         
-        # Also populate lookup tables
         _populate_budgeting_groups(df, db)
         _populate_bs_classes(df, db)
+        fpna_updated = sync_fpna_product_columns(db)
         
         return {
             'status': 'success',
             'total_rows': total_rows,
             'imported': imported,
             'updated': updated,
+            'fpna_product_rows_updated': fpna_updated,
             'errors': errors[:20],  # First 20 errors
             'error_count': len(errors),
         }
@@ -163,10 +163,25 @@ def import_coa_from_excel(
         }
 
 
+def sync_fpna_product_columns(db: Session) -> int:
+    """Persist FP&A product taxonomy on every coa_dimension row from classify rules."""
+    rows = db.query(COADimension).all()
+    for acc in rows:
+        tax = classify_coa_row(acc)
+        acc.fpna_product_key = tax['product_key'][:50]
+        acc.fpna_product_label_en = (tax['product_label_en'] or '')[:500]
+        acc.fpna_product_pillar = (tax['product_pillar'] or '')[:50]
+        dg = tax.get('display_group') or '—'
+        acc.fpna_display_group = str(dg)[:1000]
+    db.commit()
+    return len(rows)
+
+
 def _populate_budgeting_groups(df: pd.DataFrame, db: Session):
-    """Populate BudgetingGroup lookup table from COA data"""
+    """Populate BudgetingGroup lookup from Excel when BUDGETING_GROUPS column exists (legacy)."""
     try:
-        # Get unique budgeting groups
+        if 'BUDGETING_GROUPS' not in df.columns or df['BUDGETING_GROUPS'].isna().all():
+            return
         bg_df = df[['BUDGETING_GROUPS', 'BUDGETING_GROUPS_NAME', 'BS_FLAG']].dropna(
             subset=['BUDGETING_GROUPS']
         ).drop_duplicates(subset=['BUDGETING_GROUPS'])
@@ -244,22 +259,23 @@ def _populate_bs_classes(df: pd.DataFrame, db: Session):
 def get_coa_hierarchy(db: Session) -> Dict[str, Any]:
     """
     Get COA hierarchy for frontend tree view
-    Organized by: BS Class -> Budgeting Group -> Accounts
+    Organized by: BS Class -> BS group -> FP&A product -> accounts
     """
     # Get all COA records
     coa_records = db.query(COADimension).filter(
         COADimension.is_active == True
-    ).order_by(COADimension.bs_flag, COADimension.bs_group, COADimension.budgeting_groups, COADimension.coa_code).all()
+    ).order_by(
+        COADimension.bs_flag,
+        COADimension.bs_group,
+        COADimension.fpna_product_key,
+        COADimension.coa_code,
+    ).all()
     
     # Get BS classes
     bs_classes = db.query(BSClass).order_by(BSClass.display_order).all()
     bs_class_map = {bc.bs_flag: bc for bc in bs_classes}
     
-    # Get budgeting groups
-    budgeting_groups = db.query(BudgetingGroup).order_by(BudgetingGroup.display_order).all()
-    bg_map = {bg.group_id: bg for bg in budgeting_groups}
-    
-    # Build 4-level hierarchy: BS Class -> BS Group -> Budgeting Group -> COA Account
+    # Build hierarchy: BS Class -> BS Group -> FP&A product -> COA Account
     hierarchy = []
     
     for bs_class in bs_classes:
@@ -268,42 +284,51 @@ def get_coa_hierarchy(db: Session) -> Dict[str, Any]:
         if not class_accounts:
             continue
             
-        # Group by bs_group (3-digit code)
+        # Group by bs_group (3-digit code from COA dimension).
+        # When bs_group is NULL, treat as a special \"Unassigned\" bucket
+        # instead of showing confusing code \"000\".
         bs_group_map = {}
         for acc in class_accounts:
-            bs_grp = str(acc.bs_group) if acc.bs_group else '000'
+            if acc.bs_group is None:
+                bs_grp = "UNASSIGNED"
+                grp_name = "Unassigned BS group"
+            else:
+                bs_grp = str(acc.bs_group)
+                grp_name = acc.group_name or f"Group {bs_grp}"
             if bs_grp not in bs_group_map:
                 bs_group_map[bs_grp] = {
                     'bs_group': bs_grp,
-                    'group_name': acc.group_name or f'Group {bs_grp}',
+                    'group_name': grp_name,
                     'accounts': []
                 }
             bs_group_map[bs_grp]['accounts'].append(acc)
         
-        # Build BS Groups with Budgeting Groups inside
         bs_groups_list = []
         for bs_grp, grp_data in sorted(bs_group_map.items(), key=lambda x: str(x[0])):
-            # Group accounts by budgeting group
-            budgeting_group_map = {}
+            product_map = {}
             for acc in grp_data['accounts']:
-                bg_id = acc.budgeting_groups or 0
-                if bg_id not in budgeting_group_map:
-                    bg = bg_map.get(bg_id)
-                    budgeting_group_map[bg_id] = {
-                        'budgeting_group_id': bg_id,
-                        'budgeting_group_name': acc.budgeting_groups_name or (bg.name_en if bg else 'Unassigned'),
-                        'accounts': []
+                tax = resolve_coa_taxonomy(acc)
+                pk = tax['product_key']
+                if pk not in product_map:
+                    product_map[pk] = {
+                        'product_key': pk,
+                        'product_label_en': tax['product_label_en'],
+                        'product_pillar': tax['product_pillar'],
+                        'display_group': tax['display_group'],
+                        'accounts': [],
                     }
-                budgeting_group_map[bg_id]['accounts'].append({
+                product_map[pk]['accounts'].append({
                     'coa_code': acc.coa_code,
                     'coa_name': acc.coa_name,
                     'has_pl_impact': acc.has_pl_impact,
+                    **tax,
                 })
-            
+
+            prod_list = sorted(product_map.values(), key=lambda x: x['product_label_en'] or '')
             bs_groups_list.append({
                 'bs_group': bs_grp,
                 'group_name': grp_data['group_name'],
-                'budgeting_groups': list(budgeting_group_map.values()),
+                'products': prod_list,
                 'account_count': len(grp_data['accounts']),
             })
         
@@ -333,6 +358,7 @@ def get_accounts_by_budgeting_group(db: Session, group_id: int) -> List[Dict]:
             'bs_group': acc.bs_group,
             'group_name': acc.group_name,
             'has_pl_impact': acc.has_pl_impact,
+            **resolve_coa_taxonomy(acc),
         }
         for acc in accounts
     ]
@@ -342,10 +368,10 @@ def search_accounts(
     db: Session,
     query: str = None,
     bs_flag: int = None,
-    budgeting_group: int = None,
+    product_key: str = None,
     limit: int = 100
 ) -> List[Dict]:
-    """Search COA accounts with filters"""
+    """Search COA accounts with filters (FP&A product_key, not CBU budgeting group)."""
     q = db.query(COADimension).filter(COADimension.is_active == True)
     
     if query:
@@ -359,9 +385,36 @@ def search_accounts(
     if bs_flag is not None:
         q = q.filter(COADimension.bs_flag == bs_flag)
     
-    if budgeting_group is not None:
-        q = q.filter(COADimension.budgeting_groups == budgeting_group)
-    
+    if product_key:
+        pk = product_key.strip().upper()
+        has_null_pk = (
+            db.query(COADimension.id)
+            .filter(COADimension.is_active == True, COADimension.fpna_product_key.is_(None))
+            .limit(1)
+            .first()
+        )
+        if has_null_pk:
+            pool = q.order_by(COADimension.coa_code).limit(min(max(limit * 20, 200), 8000)).all()
+            accounts = [a for a in pool if resolve_coa_taxonomy(a)["product_key"] == pk][:limit]
+            return [
+                {
+                    'coa_code': acc.coa_code,
+                    'coa_name': acc.coa_name,
+                    'bs_flag': acc.bs_flag,
+                    'bs_name': acc.bs_name,
+                    'bs_group': acc.bs_group,
+                    'group_name': acc.group_name,
+                    'has_pl_impact': acc.has_pl_impact,
+                    'fpna_product_key': acc.fpna_product_key,
+                    'fpna_product_label_en': acc.fpna_product_label_en,
+                    'fpna_product_pillar': acc.fpna_product_pillar,
+                    'fpna_display_group': acc.fpna_display_group,
+                    **resolve_coa_taxonomy(acc),
+                }
+                for acc in accounts
+            ]
+        q = q.filter(COADimension.fpna_product_key == pk)
+
     accounts = q.order_by(COADimension.coa_code).limit(limit).all()
     
     return [
@@ -372,9 +425,12 @@ def search_accounts(
             'bs_name': acc.bs_name,
             'bs_group': acc.bs_group,
             'group_name': acc.group_name,
-            'budgeting_groups': acc.budgeting_groups,
-            'budgeting_groups_name': acc.budgeting_groups_name,
             'has_pl_impact': acc.has_pl_impact,
+            'fpna_product_key': acc.fpna_product_key,
+            'fpna_product_label_en': acc.fpna_product_label_en,
+            'fpna_product_pillar': acc.fpna_product_pillar,
+            'fpna_display_group': acc.fpna_display_group,
+            **resolve_coa_taxonomy(acc),
         }
         for acc in accounts
     ]

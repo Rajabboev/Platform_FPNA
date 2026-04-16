@@ -13,6 +13,9 @@ export default defineConfig(({ mode }) => {
           target: env.VITE_PROXY_TARGET || `http://127.0.0.1:${backendPort}`,
           changeOrigin: true,
           secure: false,
+          // Match LONG_RUNNING_REQUEST_TIMEOUT_MS in api.ts (budget initialize can run many minutes)
+          timeout: 900000,
+          proxyTimeout: 900000,
         },
       },
     },

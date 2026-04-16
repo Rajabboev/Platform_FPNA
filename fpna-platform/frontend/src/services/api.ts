@@ -1,13 +1,18 @@
 import axios from 'axios';
 
-// Use VITE_API_BASE_URL (e.g. http://127.0.0.1:8000) if proxy fails; else uses relative /api/v1
+// Use VITE_API_BASE_URL (e.g. http://127.0.0.1:8001) if proxy fails; else uses relative /api/v1
 const apiBase = (import.meta.env.VITE_API_BASE_URL as string)?.trim()
   ? `${(import.meta.env.VITE_API_BASE_URL as string).replace(/\/$/, '')}/api/v1`
   : '/api/v1';
 
+/** Default HTTP timeout (ms). Long jobs override per request. */
+const DEFAULT_API_TIMEOUT_MS = 120000;
+/** Budget initialize: DWH ingest + baseline + all department plans can exceed 2 minutes. */
+export const LONG_RUNNING_REQUEST_TIMEOUT_MS = 900000; // 15 minutes
+
 const api = axios.create({
   baseURL: apiBase,
-  timeout: 120000,  // 2 minutes for large data operations
+  timeout: DEFAULT_API_TIMEOUT_MS,
   headers: {
     'Content-Type': 'application/json',
   },
@@ -603,6 +608,19 @@ export const currenciesAPI = {
     return response.data;
   },
 
+  // CBU Rate Scraping
+  fetchCBURates: async (targetDate?: string) => {
+    const params = targetDate ? { target_date: targetDate } : {};
+    const response = await api.post('/currencies/rates/fetch-cbu', null, { params });
+    return response.data;
+  },
+  fetchCBURatesRange: async (startDate: string, endDate: string) => {
+    const response = await api.post('/currencies/rates/fetch-cbu-range', null, {
+      params: { start_date: startDate, end_date: endDate },
+    });
+    return response.data;
+  },
+
   // Budget FX Rates
   listBudgetRates: async (params?: { fiscal_year?: number; from_currency?: string; month?: number; is_approved?: boolean }) => {
     const response = await api.get('/currencies/budget-rates', { params });
@@ -612,8 +630,8 @@ export const currenciesAPI = {
     const response = await api.post('/currencies/budget-rates', data);
     return response.data;
   },
-  generateBudgetRates: async (data: { fiscal_year: number; from_currency: string; base_rate: number; assumption_type?: string; growth_rate?: number }) => {
-    const response = await api.post('/currencies/budget-rates/generate', data);
+  generateBudgetRates: async (data: { fiscal_year: number; from_currency: string; to_currency?: string; base_rate: number; assumption_type?: string; growth_rate?: number; notes?: string }) => {
+    const response = await api.post('/currencies/budget-rates/generate', null, { params: data });
     return response.data;
   },
   getBudgetRatePlan: async (fiscalYear: number, fromCurrency: string) => {
@@ -666,6 +684,11 @@ export const driversAPI = {
     return response.data;
   },
 
+  seedFpnaPlanningDefaults: async () => {
+    const response = await api.post('/drivers/seed-fpna-planning');
+    return response.data;
+  },
+
   // Driver Values
   listValues: async (params?: { driver_code?: string; fiscal_year?: number; month?: number; account_code?: string; is_approved?: boolean }) => {
     const response = await api.get('/drivers/values', { params });
@@ -675,13 +698,17 @@ export const driversAPI = {
     const response = await api.post('/drivers/values', data);
     return response.data;
   },
-  bulkCreateValues: async (values: Array<{ driver_id: number; fiscal_year: number; month?: number; value: number; account_code?: string }>) => {
+  bulkCreateValues: async (values: Array<{ driver_id: number; fiscal_year: number; month?: number; value: number; value_type?: string; account_code?: string }>) => {
     const response = await api.post('/drivers/values/bulk', { values });
     return response.data;
   },
   getValueMatrix: async (driverCode: string, fiscalYear: number, accountCode?: string) => {
     const params = accountCode ? { account_code: accountCode } : {};
     const response = await api.get(`/drivers/values/matrix/${driverCode}`, { params: { fiscal_year: fiscalYear, ...params } });
+    return response.data;
+  },
+  getActuals: async (driverCode: string, fiscalYear: number) => {
+    const response = await api.get(`/drivers/values/actuals/${driverCode}`, { params: { fiscal_year: fiscalYear } });
     return response.data;
   },
   approveValues: async (driverCode: string, fiscalYear: number, approvedByUserId: number) => {
@@ -744,6 +771,13 @@ export const driversAPI = {
   },
 
   // Driver-Group Assignments
+  getDriversForProduct: async (productKey: string) => {
+    const response = await api.get(
+      `/drivers/group-assignments/by-product/${encodeURIComponent(productKey)}`
+    );
+    return response.data;
+  },
+
   getDriversForGroup: async (groupId: number) => {
     const response = await api.get(`/drivers/group-assignments/by-group/${groupId}`);
     return response.data;
@@ -1479,6 +1513,12 @@ export const coaDimensionAPI = {
     return response.data;
   },
 
+  /** Recompute fpna_product_* on all rows (after DB upgrade or taxonomy rule changes) */
+  rebuildFpnaProducts: async () => {
+    const response = await api.post('/coa-dimension/rebuild-fpna-products');
+    return response.data;
+  },
+
   // Get COA hierarchy for tree view
   getHierarchy: async () => {
     const response = await api.get('/coa-dimension/hierarchy');
@@ -1489,7 +1529,7 @@ export const coaDimensionAPI = {
   listAccounts: async (params?: {
     query?: string;
     bs_flag?: number;
-    budgeting_group?: number;
+    product_key?: string;
     skip?: number;
     limit?: number;
   }) => {
@@ -1532,6 +1572,24 @@ export const coaDimensionAPI = {
     const response = await api.get('/coa-dimension/stats');
     return response.data;
   },
+
+  /** FP&A product buckets (Loans, Deposits, P&L, etc.) derived from coa_dimension */
+  getProductTaxonomy: async () => {
+    const response = await api.get('/coa-dimension/product-taxonomy');
+    return response.data;
+  },
+
+  getProductSummary: async () => {
+    const response = await api.get('/coa-dimension/product-summary');
+    return response.data;
+  },
+
+  listAccountsByProduct: async (productKey: string, params?: { skip?: number; limit?: number }) => {
+    const response = await api.get(`/coa-dimension/accounts/by-product/${encodeURIComponent(productKey)}`, {
+      params,
+    });
+    return response.data;
+  },
 };
 
 // Department API
@@ -1542,7 +1600,7 @@ export const departmentAPI = {
     return response.data;
   },
 
-  // Create department
+  // Create department (product owner — set primary_product_key to FP&A taxonomy key when possible)
   create: async (data: {
     code: string;
     name_en: string;
@@ -1551,8 +1609,11 @@ export const departmentAPI = {
     description?: string;
     parent_id?: number;
     head_user_id?: number;
+    manager_user_id?: number;
     is_baseline_only?: boolean;
     display_order?: number;
+    dwh_segment_value?: string;
+    primary_product_key?: string | null;
   }) => {
     const response = await api.post('/departments/', data);
     return response.data;
@@ -1572,11 +1633,20 @@ export const departmentAPI = {
     description: string;
     parent_id: number;
     head_user_id: number;
+    manager_user_id: number;
     is_active: boolean;
     is_baseline_only: boolean;
     display_order: number;
+    dwh_segment_value: string;
+    primary_product_key: string | null;
   }>) => {
     const response = await api.patch(`/departments/${deptId}`, data);
+    return response.data;
+  },
+
+  /** One department per FP&A product (excludes UNCLASSIFIED); sets access to that product only */
+  seedProductOwners: async () => {
+    const response = await api.post('/departments/seed-product-owners');
     return response.data;
   },
 
@@ -1610,6 +1680,12 @@ export const departmentAPI = {
     return response.data;
   },
 
+  /** FP&A product buckets (Loans, Deposits, …) — preferred over assignGroups for new plans */
+  assignProducts: async (deptId: number, productKeys: string[]) => {
+    const response = await api.post(`/departments/${deptId}/assign-products`, { product_keys: productKeys });
+    return response.data;
+  },
+
   // Get department groups
   getGroups: async (deptId: number) => {
     const response = await api.get(`/departments/${deptId}/groups`);
@@ -1625,8 +1701,11 @@ export const budgetPlanningAPI = {
     source_table?: string;
     source_years?: number[];
     calculation_method?: string;
+    column_mapping?: Record<string, string>;
   }) => {
-    const response = await api.post(`/budget-planning/initialize/${fiscalYear}`, data);
+    const response = await api.post(`/budget-planning/initialize/${fiscalYear}`, data, {
+      timeout: LONG_RUNNING_REQUEST_TIMEOUT_MS,
+    });
     return response.data;
   },
 
@@ -1635,7 +1714,10 @@ export const budgetPlanningAPI = {
     source_years?: number[];
     method?: string;
   }) => {
-    const response = await api.post(`/budget-planning/calculate-baseline/${fiscalYear}`, null, { params });
+    const response = await api.post(`/budget-planning/calculate-baseline/${fiscalYear}`, null, {
+      params,
+      timeout: LONG_RUNNING_REQUEST_TIMEOUT_MS,
+    });
     return response.data;
   },
 
@@ -1648,6 +1730,41 @@ export const budgetPlanningAPI = {
   // Get department template
   getDepartmentTemplate: async (deptId: number, fiscalYear: number) => {
     const response = await api.get(`/budget-planning/department/${deptId}/template`, { params: { fiscal_year: fiscalYear } });
+    return response.data;
+  },
+
+  // Get P&L planning data (COA-level income statement)
+  getDepartmentPLData: async (
+    deptId: number,
+    fiscalYear: number,
+    scenario?: string,
+    opts?: { seasonality_reference_year?: number }
+  ) => {
+    const params: Record<string, any> = { fiscal_year: fiscalYear };
+    if (scenario) params.scenario = scenario;
+    if (opts?.seasonality_reference_year != null) {
+      params.seasonality_reference_year = opts.seasonality_reference_year;
+    }
+    const response = await api.get(`/budget-planning/department/${deptId}/pl-data`, { params });
+    return response.data;
+  },
+
+  /** Historic YoY from BaselineData → suggested PL_GROWTH / p_l_flag deltas (e.g. FY2026 → 2025 vs 2024) */
+  getPlDriverProposals: async (
+    fiscalYear: number,
+    opts?: { year_old?: number; year_new?: number; segment?: string }
+  ) => {
+    const params: Record<string, any> = { fiscal_year: fiscalYear };
+    if (opts?.year_old != null) params.year_old = opts.year_old;
+    if (opts?.year_new != null) params.year_new = opts.year_new;
+    if (opts?.segment) params.segment = opts.segment;
+    const response = await api.get('/budget-planning/pl-driver-proposals', { params });
+    return response.data;
+  },
+
+  /** CFO: set baseline-reference P&L group adjusted = baseline × (1 + historic YoY%) per FP&A product */
+  applyPlHistoricYoy: async (fiscalYear: number) => {
+    const response = await api.post(`/budget-planning/apply-pl-historic-yoy/${fiscalYear}`);
     return response.data;
   },
 
@@ -1749,6 +1866,298 @@ export const budgetPlanningAPI = {
   getAllBudgetingGroups: async (fiscalYear: number) => {
     const response = await api.get(`/budget-planning/all-groups/${fiscalYear}`);
     return response.data;
+  },
+
+  getDriverConfig: async (fiscalYear: number) => {
+    const response = await api.get(`/budget-planning/driver-config/${fiscalYear}`);
+    return response.data;
+  },
+
+  saveDriverConfig: async (fiscalYear: number, configs: Array<{
+    budgeting_group_id?: number | null;
+    fpna_product_key?: string | null;
+    driver_id: number | null;
+    rate: number | null;
+    monthly_rates?: Record<string, number>;
+  }>) => {
+    const response = await api.post(`/budget-planning/driver-config/${fiscalYear}`, { configs });
+    return response.data;
+  },
+
+  applyDriversBulk: async (fiscalYear: number) => {
+    const response = await api.post(`/budget-planning/apply-drivers-bulk/${fiscalYear}`);
+    return response.data;
+  },
+
+  // DWH Source preview
+  previewSource: async (connectionId: number, tableName: string, limit: number = 50) => {
+    const response = await api.post('/budget-planning/preview-source', {
+      connection_id: connectionId,
+      table_name: tableName,
+      limit,
+    });
+    return response.data;
+  },
+
+  // Compare baselines (all 5 methods)
+  compareBaselines: async (fiscalYear: number, sourceYears?: number[]) => {
+    const response = await api.post(`/budget-planning/compare-baselines/${fiscalYear}`, null, {
+      params: { source_years: sourceYears },
+    });
+    return response.data;
+  },
+
+  // Department assignments v2 (optional: only FP&A product owner departments)
+  getDepartmentAssignments: async (fiscalYear: number, productOwnersOnly: boolean = false) => {
+    const response = await api.get(`/budget-planning/department-assignments/${fiscalYear}`, {
+      params: { product_owners_only: productOwnersOnly },
+    });
+    return response.data;
+  },
+
+  assignDepartmentsV2: async (fiscalYear: number, assignments: Array<{
+    department_id: number;
+    budgeting_group_ids: number[];
+    can_edit: boolean;
+    can_submit: boolean;
+  }>, notify: boolean = true) => {
+    const response = await api.post('/budget-planning/assign-departments-v2', {
+      fiscal_year: fiscalYear,
+      assignments,
+      notify,
+    });
+    return response.data;
+  },
+
+  // CEO Consolidated
+  getConsolidatedPlan: async (fiscalYear: number) => {
+    const response = await api.get(`/budget-planning/consolidated/${fiscalYear}`);
+    return response.data;
+  },
+
+  ceoApprove: async (fiscalYear: number, comment?: string) => {
+    const response = await api.post(`/budget-planning/ceo-approve/${fiscalYear}`, { comment });
+    return response.data;
+  },
+
+  ceoReject: async (fiscalYear: number, reason: string) => {
+    const response = await api.post(`/budget-planning/ceo-reject/${fiscalYear}`, { reason });
+    return response.data;
+  },
+
+  // Scenarios
+  listScenarios: async (fiscalYear: number) => {
+    const response = await api.get(`/budget-planning/scenarios/${fiscalYear}`);
+    return response.data;
+  },
+
+  createScenario: async (fiscalYear: number, data: { name: string; description?: string; scenario_type?: string }) => {
+    const response = await api.post(`/budget-planning/scenarios/${fiscalYear}`, data);
+    return response.data;
+  },
+
+  updateScenarioAdjustments: async (scenarioId: number, adjustments: Array<{
+    budgeting_group_id: number;
+    adjustment_type: string;
+    value: number;
+    notes?: string;
+  }>) => {
+    const response = await api.put(`/budget-planning/scenarios/${scenarioId}/adjustments`, { adjustments });
+    return response.data;
+  },
+
+  approveScenario: async (scenarioId: number) => {
+    const response = await api.post(`/budget-planning/scenarios/${scenarioId}/approve`);
+    return response.data;
+  },
+
+  compareScenario: async (scenarioId: number) => {
+    const response = await api.get(`/budget-planning/scenarios/${scenarioId}/compare`);
+    return response.data;
+  },
+
+  // Fact Table (account-level approved budget)
+  getFactTable: async (fiscalYear: number, params?: {
+    department_code?: string;
+    budgeting_group_id?: number;
+    month?: number;
+    page?: number;
+    page_size?: number;
+  }) => {
+    const response = await api.get(`/budget-planning/fact-table/${fiscalYear}`, { params });
+    return response.data;
+  },
+
+  getFactTableSummary: async (fiscalYear: number) => {
+    const response = await api.get(`/budget-planning/fact-table/${fiscalYear}/summary`);
+    return response.data;
+  },
+
+  resetFiscalYear: async (fiscalYear: number) => {
+    const response = await api.delete(`/budget-planning/reset/${fiscalYear}`);
+    return response.data;
+  },
+};
+
+// ========== Analysis API ==========
+export const analysisAPI = {
+  getYoYDelta: async (fiscalYear: number) => {
+    const response = await api.get(`/analysis/yoy-delta/${fiscalYear}`);
+    return response.data;
+  },
+
+  getPlanDelta: async (fiscalYear: number) => {
+    const response = await api.get(`/analysis/plan-delta/${fiscalYear}`);
+    return response.data;
+  },
+
+  getMonthlyTrend: async (fiscalYear: number) => {
+    const response = await api.get(`/analysis/monthly-trend/${fiscalYear}`);
+    return response.data;
+  },
+
+  getDashboardKPIs: async (fiscalYear: number) => {
+    const response = await api.get(`/analysis/dashboard-kpis/${fiscalYear}`);
+    return response.data;
+  },
+};
+
+// Reporting API
+export const reportingAPI = {
+  // Power BI workspace config (stored in backend for team-wide config)
+  getPowerBIConfig: async () => {
+    const response = await api.get('/reporting/powerbi/config');
+    return response.data;
+  },
+
+  savePowerBIConfig: async (config: { workspace_url?: string; tenant_id?: string; client_id?: string }) => {
+    const response = await api.post('/reporting/powerbi/config', config);
+    return response.data;
+  },
+
+  // Report list from Power BI workspace (requires API auth configured)
+  listWorkspaceReports: async () => {
+    const response = await api.get('/reporting/powerbi/reports');
+    return response.data;
+  },
+
+  // Excel ad-hoc exports
+  exportBudgetPlan: async (fiscalYear: number, format: 'xlsx' | 'csv' = 'xlsx') => {
+    const response = await api.get(`/reporting/export/budget-plan`, {
+      params: { fiscal_year: fiscalYear, format },
+      responseType: 'blob',
+    });
+    return response.data;
+  },
+
+  exportVarianceReport: async (fiscalYear: number, period?: string) => {
+    const response = await api.get('/reporting/export/variance', {
+      params: { fiscal_year: fiscalYear, period },
+      responseType: 'blob',
+    });
+    return response.data;
+  },
+
+  exportAdHoc: async (params: {
+    dataset: string;
+    group_by: string;
+    period: string;
+    fiscal_year: number;
+    filters?: Record<string, string>;
+  }) => {
+    const response = await api.post('/reporting/export/adhoc', params, { responseType: 'blob' });
+    return response.data;
+  },
+
+  // Paginated report generation (PDF/XLSX)
+  generateReport: async (reportId: string, params?: Record<string, unknown>) => {
+    const response = await api.post(`/reporting/paginated/${reportId}/generate`, params || {}, { responseType: 'blob' });
+    return response.data;
+  },
+
+  listGeneratedReports: async () => {
+    const response = await api.get('/reporting/paginated/history');
+    return response.data;
+  },
+};
+
+// ── AI Assistant API ───────────────────────────────────────────────────────
+
+export const aiAPI = {
+  /** Non-streaming scenario calculation + narrative */
+  runScenario: async (fiscalYear: number, adjustments: { label: string; department?: string; change_type: string; value: number }[]) => {
+    const response = await api.post('/ai/scenario', { fiscal_year: fiscalYear, adjustments });
+    return response.data;
+  },
+
+  /** Plan health check (verdict + alerts) */
+  healthCheck: async (fiscalYear: number, alertThresholdPct = 10) => {
+    const response = await api.post('/ai/health-check', { fiscal_year: fiscalYear, alert_threshold_pct: alertThresholdPct });
+    return response.data;
+  },
+
+  /** List saved AI projections */
+  listProjections: async (fiscalYear: number) => {
+    const response = await api.get('/ai/projections', { params: { fiscal_year: fiscalYear } });
+    return response.data;
+  },
+
+  /** Get detailed projection */
+  getProjection: async (scenarioName: string, fiscalYear: number) => {
+    const response = await api.get(`/ai/projections/${scenarioName}`, { params: { fiscal_year: fiscalYear } });
+    return response.data;
+  },
+
+  /** Delete a projection */
+  deleteProjection: async (scenarioName: string, fiscalYear: number) => {
+    const response = await api.delete(`/ai/projections/${scenarioName}`, { params: { fiscal_year: fiscalYear } });
+    return response.data;
+  },
+};
+
+// ── Real Excel Export API ──────────────────────────────────────────────────
+
+/** Downloads a blob and triggers browser file-save dialog */
+function _downloadBlob(blob: Blob, filename: string) {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  a.style.display = 'none';
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+export const excelExportAPI = {
+  budgetPlan: async (fiscalYear: number) => {
+    const response = await api.get('/reports/budget-plan/export', {
+      params: { fiscal_year: fiscalYear },
+      responseType: 'blob',
+    });
+    _downloadBlob(response.data, `budget_plan_FY${fiscalYear}.xlsx`);
+  },
+
+  variance: async (fiscalYear: number) => {
+    const response = await api.get('/reports/variance/export', {
+      params: { fiscal_year: fiscalYear },
+      responseType: 'blob',
+    });
+    _downloadBlob(response.data, `variance_FY${fiscalYear}.xlsx`);
+  },
+
+  baselineComparison: async (fiscalYear: number) => {
+    const response = await api.get('/reports/baseline/export', {
+      params: { fiscal_year: fiscalYear },
+      responseType: 'blob',
+    });
+    _downloadBlob(response.data, `baseline_comparison_FY${fiscalYear}.xlsx`);
+  },
+
+  adhoc: async (params: { fiscal_year: number; dataset: string; group_by: string; period: string }) => {
+    const response = await api.post('/reports/adhoc/export', params, { responseType: 'blob' });
+    _downloadBlob(response.data, `adhoc_${params.dataset.replace(/ /g, '_')}_FY${params.fiscal_year}.xlsx`);
   },
 };
 

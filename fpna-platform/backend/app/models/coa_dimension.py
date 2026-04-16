@@ -10,15 +10,16 @@ Hierarchy Levels:
 - L3: COA_CODE (5-digit account code, e.g., 10101)
 
 Key Groupings:
-- BUDGETING_GROUPS: Main grouping for FP&A templates and budgeting
+- fpna_product_* columns: FP&A product taxonomy (derived on import) — primary planning bucket
 - P_L categorization: For income statement accounts
+- budgeting_groups: optional legacy CBU field (not used for FP&A logic)
 """
 
 from sqlalchemy import Column, Integer, String, Float, Boolean, DateTime, Text, Index
 from sqlalchemy.sql import func
 from app.database import Base
 
-
+    
 class COADimension(Base):
     """
     CBU Chart of Accounts Dimension
@@ -60,9 +61,15 @@ class COADimension(Base):
     asset_liability_flag_2 = Column(Integer)
     asset_liability_flag_2_name = Column(String(255))
     
-    # FP&A Budgeting Groups (Main grouping for templates)
-    budgeting_groups = Column(Integer, index=True)
-    budgeting_groups_name = Column(String(500))
+    # Legacy CBU budgeting group (optional Excel column — not used for FP&A planning logic)
+    budgeting_groups = Column(Integer, index=True, nullable=True)
+    budgeting_groups_name = Column(String(500), nullable=True)
+
+    # FP&A product taxonomy (derived on import; primary bucket for planning & hierarchy)
+    fpna_product_key = Column(String(50), nullable=True, index=True)
+    fpna_product_label_en = Column(String(500), nullable=True)
+    fpna_product_pillar = Column(String(50), nullable=True)
+    fpna_display_group = Column(String(1000), nullable=True)
     
     # P&L Classification
     p_l_flag = Column(Integer)
@@ -83,6 +90,7 @@ class COADimension(Base):
     __table_args__ = (
         Index('ix_coa_dim_bs_flag_group', 'bs_flag', 'bs_group'),
         Index('ix_coa_dim_budgeting', 'budgeting_groups'),
+        Index('ix_coa_dim_fpna_product', 'fpna_product_key'),
         Index('ix_coa_dim_pl', 'p_l_flag', 'p_l_sub_group'),
     )
 

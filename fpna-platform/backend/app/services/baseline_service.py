@@ -56,16 +56,20 @@ class BaselineService:
             if not dwh_engine:
                 raise ValueError(f"Connection {connection_id} not found or inactive")
             
-            # Query to aggregate balans_ato by account and month
-            query = text("""
+            # Signed balance: PRIZNALL=1 -> +OSTATALL, PRIZNALL=0 -> -OSTATALL (else +OSTATALL)
+            from app.services.balans_signed_balance import sql_signed_balance_sum
+
+            _uzs = sql_signed_balance_sum("OSTATALL", "PRIZNALL")
+            _val = sql_signed_balance_sum("OSTATALLVAL", "PRIZNALL")
+            query = text(f"""
                 SELECT 
                     KODBALANS as account_code,
                     CURDATE as snapshot_date,
                     YEAR(CURDATE) as fiscal_year,
                     MONTH(CURDATE) as fiscal_month,
                     KODVALUTA as currency_code,
-                    SUM(ISNULL(OSTATALL, 0)) as balance_uzs,
-                    SUM(ISNULL(OSTATALLVAL, 0)) as balance,
+                    {_uzs} as balance_uzs,
+                    {_val} as balance,
                     SUM(ISNULL(OSTATALL_DT, 0)) as debit_turnover,
                     SUM(ISNULL(OSTATALL_CT, 0)) as credit_turnover
                 FROM dbo.balans_ato
