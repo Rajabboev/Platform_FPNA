@@ -1,0 +1,25 @@
+version: "3.9"
+
+services:
+  api:
+    image: ${DOCKERHUB_NAMESPACE}/fpna-api:${IMAGE_TAG:-latest}
+    container_name: fpna-api
+    env_file:
+      - ./backend/.env
+    environment:
+      # Ensure SQL Server ODBC driver name matches the image.
+      DATABASE_DRIVER: ODBC Driver 18 for SQL Server
+      # Add frontend URL/IP in production if needed.
+      CORS_ORIGINS: http://localhost,http://127.0.0.1
+    expose:
+      - "8001"
+    restart: unless-stopped
+
+  web:
+    image: ${DOCKERHUB_NAMESPACE}/fpna-web:${IMAGE_TAG:-latest}
+    container_name: fpna-web
+    depends_on:
+      - api
+    ports:
+      - "80:80"
+    restart: unless-stopped
