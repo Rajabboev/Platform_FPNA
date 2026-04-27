@@ -1064,13 +1064,38 @@ def get_group_details(
     
     months = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec']
     
+    # Some historical imports wrote corrupted placeholders (e.g. "????") into
+    # budget_plan_details.coa_name. Prefer COA dimension names as a safe fallback.
+    coa_codes = [d.coa_code for d in group.details if d.coa_code]
+    coa_name_map: Dict[str, str] = {}
+    if coa_codes:
+        coa_rows = (
+            db.query(COADimension.coa_code, COADimension.coa_name)
+            .filter(COADimension.coa_code.in_(coa_codes))
+            .all()
+        )
+        coa_name_map = {str(r[0]): (r[1] or "") for r in coa_rows}
+
+    def _looks_corrupted_name(value: Optional[str]) -> bool:
+        if value is None:
+            return True
+        v = value.strip()
+        if not v:
+            return True
+        q = v.count("?")
+        # Typical SQL Server lossy conversion symptom: most characters become '?'.
+        return q >= 3 and q >= max(3, len(v) // 3)
+
     details = []
     for detail in group.details:
         monthly = {m: float(getattr(detail, f'baseline_{m}', 0) or 0) for m in months}
+        raw_name = detail.coa_name
+        fallback_name = coa_name_map.get(str(detail.coa_code), "")
+        resolved_name = fallback_name if _looks_corrupted_name(raw_name) and fallback_name else (raw_name or fallback_name)
         details.append({
             'id': detail.id,
             'coa_code': detail.coa_code,
-            'coa_name': detail.coa_name,
+            'coa_name': resolved_name,
             'bs_group': detail.bs_group,
             'bs_group_name': detail.bs_group_name,
             'baseline_total': float(detail.baseline_total or 0),
