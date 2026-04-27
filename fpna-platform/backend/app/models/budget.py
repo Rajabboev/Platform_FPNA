@@ -57,11 +57,13 @@ class Budget(Base):
     
     # Template and baseline support
     template_id = Column(Integer, ForeignKey("budget_templates.id", ondelete="SET NULL"), nullable=True, index=True)
-    template_assignment_id = Column(Integer, ForeignKey("template_assignments.id", ondelete="SET NULL"), nullable=True)
+    # SQL Server blocks multiple cascade paths; keep NO ACTION here.
+    template_assignment_id = Column(Integer, ForeignKey("template_assignments.id"), nullable=True)
     baseline_version = Column(Integer)
     budget_type = Column(SQLEnum(BudgetType), default=BudgetType.BASELINE)
     is_baseline = Column(Boolean, default=False)
-    parent_budget_id = Column(Integer, ForeignKey("budgets.id", ondelete="SET NULL"), nullable=True)
+    # SQL Server blocks self-referential cascade chains in some combinations.
+    parent_budget_id = Column(Integer, ForeignKey("budgets.id"), nullable=True)
     
     # Version control
     version = Column(Integer, default=1)
