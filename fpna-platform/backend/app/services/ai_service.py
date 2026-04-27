@@ -63,6 +63,7 @@ Response style:
 - When returning projection results, format them as a structured table using the projection_table JSON block
 - For alerts, use "⚠️" prefix for warnings and "🔴" for critical issues
 - Always state whether the plan is BETTER or WORSE vs baseline
+- For driver-impact answers, call get_driver_analysis first and prioritize `assigned_products` / `product_values`; do not present legacy driver names as "most impactful" unless they are explicitly present in tool output.
 
 When you generate a projection, ALWAYS include a summary table in your response using this JSON format:
 {"projection_table": {"scenario": "name", "fiscal_year": 2026, "rows": [{"category": "...", "baseline": 0, "projected": 0, "change_pct": 0}], "summary": {"nii": {"baseline": 0, "projected": 0}, "net_income": {"baseline": 0, "projected": 0}}}}
@@ -123,7 +124,7 @@ TOOLS: List[Dict[str, Any]] = [
     },
     {
         "name": "get_driver_analysis",
-        "description": "List active budget drivers and their calculated impact on the plan",
+        "description": "List active drivers prioritized by current FP&A product assignments and current-year values; avoid generic legacy-only lists",
         "input_schema": {
             "type": "object",
             "properties": {
@@ -369,7 +370,72 @@ def _tool_check_plan_health(db: Session, fiscal_year: int, alert_threshold_pct: 
 
 def _tool_get_driver_analysis(db: Session, fiscal_year: int) -> Dict[str, Any]:
     try:
-        q = """
+        # Product-based assignments (v2) are the primary source of truth for what drivers matter.
+        q_product_assignments = """
+            SELECT
+                UPPER(dga.fpna_product_key) AS product_key,
+                d.code,
+                d.name_en,
+                d.driver_type,
+                dga.is_default
+            FROM driver_group_assignments dga
+            JOIN drivers d ON d.id = dga.driver_id
+            WHERE dga.is_active = 1
+              AND d.is_active = 1
+              AND dga.fpna_product_key IS NOT NULL
+            ORDER BY UPPER(dga.fpna_product_key), dga.is_default DESC, d.code
+        """
+        pa_rows = db.execute(text(q_product_assignments)).fetchall()
+
+        by_product: Dict[str, List[Dict[str, Any]]] = {}
+        for r in pa_rows:
+            pk = (r[0] or "").upper()
+            if not pk:
+                continue
+            by_product.setdefault(pk, []).append(
+                {
+                    "code": r[1],
+                    "name": r[2],
+                    "type": r[3],
+                    "is_default": bool(r[4]),
+                }
+            )
+
+        # Current-year values at FP&A product scope show what is actually configured/used.
+        q_product_values = """
+            SELECT
+                UPPER(dv.fpna_product_key) AS product_key,
+                d.code,
+                d.name_en,
+                d.driver_type,
+                COUNT(dv.id) AS value_count,
+                AVG(CAST(dv.value AS FLOAT)) AS avg_value
+            FROM driver_values dv
+            JOIN drivers d ON d.id = dv.driver_id
+            WHERE dv.fiscal_year = :fy
+              AND dv.fpna_product_key IS NOT NULL
+              AND d.is_active = 1
+            GROUP BY UPPER(dv.fpna_product_key), d.code, d.name_en, d.driver_type
+            ORDER BY UPPER(dv.fpna_product_key), d.code
+        """
+        pv_rows = db.execute(text(q_product_values), {"fy": fiscal_year}).fetchall()
+        values_by_product: Dict[str, List[Dict[str, Any]]] = {}
+        for r in pv_rows:
+            pk = (r[0] or "").upper()
+            if not pk:
+                continue
+            values_by_product.setdefault(pk, []).append(
+                {
+                    "code": r[1],
+                    "name": r[2],
+                    "type": r[3],
+                    "value_count": int(r[4] or 0),
+                    "avg_value": round(float(r[5] or 0), 4),
+                }
+            )
+
+        # Legacy/global fallback view for environments not yet migrated.
+        q_legacy = """
             SELECT d.code, d.name_en, d.driver_type,
                    COUNT(dv.id) AS value_count,
                    AVG(CAST(dv.value AS FLOAT)) AS avg_value
@@ -379,18 +445,36 @@ def _tool_get_driver_analysis(db: Session, fiscal_year: int) -> Dict[str, Any]:
             GROUP BY d.code, d.name_en, d.driver_type
             ORDER BY d.code
         """
-        rows = db.execute(text(q), {"fy": fiscal_year}).fetchall()
-        drivers = [
+        legacy_rows = db.execute(text(q_legacy), {"fy": fiscal_year}).fetchall()
+        legacy = [
             {
-                "code": r[0], "name": r[1], "type": r[2],
-                "assignments": r[3], "avg_value": round(float(r[4] or 0), 4)
+                "code": r[0],
+                "name": r[1],
+                "type": r[2],
+                "value_count": int(r[3] or 0),
+                "avg_value": round(float(r[4] or 0), 4),
             }
-            for r in rows
+            for r in legacy_rows
         ]
-        return {"fiscal_year": fiscal_year, "drivers": drivers, "total": len(drivers)}
+
+        return {
+            "fiscal_year": fiscal_year,
+            "mode": "product_assignments" if by_product else "legacy_fallback",
+            "assigned_products": [
+                {"product_key": k, "drivers": v}
+                for k, v in sorted(by_product.items(), key=lambda x: x[0])
+            ],
+            "product_values": [
+                {"product_key": k, "drivers": v}
+                for k, v in sorted(values_by_product.items(), key=lambda x: x[0])
+            ],
+            "legacy_drivers": legacy,
+            "total_products_with_assignments": len(by_product),
+            "total_products_with_values": len(values_by_product),
+        }
     except Exception as e:
         logger.warning("get_driver_analysis error: %s", e)
-        return {"drivers": [], "error": str(e)}
+        return {"assigned_products": [], "product_values": [], "legacy_drivers": [], "error": str(e)}
 
 
 def _tool_get_pl_driver_proposals(
