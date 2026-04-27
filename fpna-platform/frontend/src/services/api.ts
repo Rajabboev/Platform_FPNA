@@ -61,6 +61,50 @@ export const authAPI = {
   }
 };
 
+export const usersAPI = {
+  list: async () => {
+    const response = await api.get('/auth/users');
+    return response.data;
+  },
+
+  listRoles: async () => {
+    const response = await api.get('/auth/roles');
+    return response.data;
+  },
+
+  create: async (data: {
+    username: string;
+    email: string;
+    full_name: string;
+    password: string;
+    employee_id?: string;
+    department?: string;
+    branch?: string;
+    is_active?: boolean;
+    roles: string[];
+  }) => {
+    const response = await api.post('/auth/users', data);
+    return response.data;
+  },
+
+  update: async (
+    userId: number,
+    data: {
+      email?: string;
+      full_name?: string;
+      password?: string;
+      employee_id?: string;
+      department?: string;
+      branch?: string;
+      is_active?: boolean;
+      roles?: string[];
+    }
+  ) => {
+    const response = await api.patch(`/auth/users/${userId}`, data);
+    return response.data;
+  },
+};
+
 // Budget API
 export const budgetAPI = {
   list: async (params?: any) => {
@@ -686,6 +730,58 @@ export const driversAPI = {
 
   seedFpnaPlanningDefaults: async () => {
     const response = await api.post('/drivers/seed-fpna-planning');
+    return response.data;
+  },
+
+  seedMetadataLogic: async () => {
+    const response = await api.post('/drivers/seed-metadata-logic');
+    return response.data;
+  },
+
+  listMetadataLogic: async (params?: { driver_code?: string; is_active?: boolean }) => {
+    const response = await api.get('/drivers/metadata-logic', { params });
+    return response.data;
+  },
+
+  createMetadataLogic: async (data: {
+    driver_id?: number | null;
+    code: string;
+    name: string;
+    description?: string;
+    scope_fields?: string;
+    formula_expr: string;
+    output_mode?: string;
+    rounding_mode?: string;
+    min_value?: number;
+    max_value?: number;
+    is_active?: boolean;
+  }) => {
+    const response = await api.post('/drivers/metadata-logic', data);
+    return response.data;
+  },
+
+  updateMetadataLogic: async (logicId: number, data: Record<string, unknown>) => {
+    const response = await api.patch(`/drivers/metadata-logic/${logicId}`, data);
+    return response.data;
+  },
+
+  validateMetadataLogic: async (logicId: number, data: { formula_expr: string; sample_context?: Record<string, unknown> }) => {
+    const response = await api.post(`/drivers/metadata-logic/${logicId}/validate`, data);
+    return response.data;
+  },
+
+  publishMetadataLogic: async (logicId: number) => {
+    const response = await api.post(`/drivers/metadata-logic/${logicId}/publish`);
+    return response.data;
+  },
+
+  getMetadataRevisions: async (logicId: number) => {
+    const response = await api.get(`/drivers/metadata-logic/${logicId}/revisions`);
+    return response.data;
+  },
+
+  getMetadataExecutionLogs: async (params?: { logic_code?: string; status?: string; limit?: number }) => {
+    const response = await api.get('/drivers/metadata-logic/execution-logs', { params });
     return response.data;
   },
 

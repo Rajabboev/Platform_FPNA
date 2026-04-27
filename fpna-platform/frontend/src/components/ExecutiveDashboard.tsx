@@ -95,7 +95,7 @@ const ExecutiveDashboard: React.FC<Props> = ({ theme, onNavigate }) => {
             className="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-lg flex items-center gap-2 text-sm font-medium">
             <Calculator className="w-4 h-4" /> Budget Planning
           </button>
-          <button onClick={() => onNavigate('budget-analysis')}
+          <button onClick={() => onNavigate('analytics')}
             className={`px-4 py-2 rounded-lg flex items-center gap-2 text-sm font-medium border ${isDark ? 'bg-slate-800 border-slate-700 text-slate-100' : 'bg-white border-slate-200 text-slate-700 hover:bg-slate-50'}`}>
             <BarChart2 className="w-4 h-4" /> Analysis
           </button>
@@ -204,7 +204,7 @@ const ExecutiveDashboard: React.FC<Props> = ({ theme, onNavigate }) => {
             <div className="flex gap-3">
               {monthlyTrend?.years && Object.keys(monthlyTrend.years).map((yr: string, i: number) => (
                 <span key={yr} className={`flex items-center gap-1 text-xs ${textS}`}>
-                  <div className={`w-2.5 h-2 rounded-sm ${i === 0 ? 'bg-gray-300' : i === 1 ? 'bg-blue-400' : 'bg-indigo-600'}`} />
+                  <div className={`w-2.5 h-2 rounded-sm ${i === 0 ? 'bg-gray-300' : i === 1 ? 'bg-red-400' : 'bg-indigo-600'}`} />
                   FY {yr}
                 </span>
               ))}
@@ -217,7 +217,7 @@ const ExecutiveDashboard: React.FC<Props> = ({ theme, onNavigate }) => {
                   <div className={`text-xs mb-1 ${textS}`}>
                     FY {yr} {Number(yr) === fiscalYear && <span className="text-indigo-500 font-medium">(Plan)</span>}
                   </div>
-                  <Sparkline data={data} color={i === 0 ? 'bg-gray-300' : i === 1 ? 'bg-blue-400' : 'bg-indigo-500'} />
+                  <Sparkline data={data} color={i === 0 ? 'bg-green-300' : i === 1 ? 'bg-red-400' : 'bg-indigo-500'} />
                 </div>
               ))}
               <div className={`flex justify-between text-[10px] mt-1 ${textS}`}>
@@ -235,7 +235,7 @@ const ExecutiveDashboard: React.FC<Props> = ({ theme, onNavigate }) => {
         {[
           { page: 'data-integration', icon: <Database className="w-5 h-5 text-blue-600" />, bg: 'bg-blue-50', label: 'Data Integration', sub: 'DWH connections' },
           { page: 'budget-planning', icon: <Calculator className="w-5 h-5 text-emerald-600" />, bg: 'bg-emerald-50', label: 'Budget Planning', sub: '7-step workflow' },
-          { page: 'budget-analysis', icon: <BarChart2 className="w-5 h-5 text-indigo-600" />, bg: 'bg-indigo-50', label: 'Analysis', sub: 'Delta & variance' },
+          { page: 'analytics', icon: <BarChart2 className="w-5 h-5 text-indigo-600" />, bg: 'bg-indigo-50', label: 'Analysis', sub: 'Delta & variance' },
           { page: 'approvals', icon: <Users className="w-5 h-5 text-amber-600" />, bg: 'bg-amber-50', label: 'Approvals', sub: 'Review & approve' },
           { page: 'variance-report', icon: <TrendingUp className="w-5 h-5 text-purple-600" />, bg: 'bg-purple-50', label: 'Fact vs Plan', sub: 'Variance report' },
         ].map(a => (

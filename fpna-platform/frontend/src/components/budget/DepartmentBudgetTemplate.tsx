@@ -195,6 +195,23 @@ const formatCurrency = (num: number): string => {
   return num.toFixed(0);
 };
 
+const normalizeBsClassName = (bsFlag: number, rawName?: string): string => {
+  const byFlag: Record<number, string> = {
+    1: 'Assets',
+    2: 'Liabilities',
+    3: 'Capital',
+    9: 'Off-balance',
+  };
+  if (byFlag[bsFlag]) return byFlag[bsFlag];
+
+  const n = (rawName || '').toLowerCase();
+  if (n.includes('актив')) return 'Assets';
+  if (n.includes('мажбур') || n.includes('обязател')) return 'Liabilities';
+  if (n.includes('капитал')) return 'Capital';
+  if (n.includes('off') || n.includes('внебал')) return 'Off-balance';
+  return rawName?.trim() || `Class ${bsFlag}`;
+};
+
 /** P&L monthly grid — matches API month_keys (baseline/adjusted field names). */
 const PL_MONTH_KEYS = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec'] as const;
 const PL_MONTH_LABELS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
@@ -709,7 +726,7 @@ const DepartmentBudgetTemplate: React.FC<Props> = ({ departmentId, fiscalYear, o
       bsGroup.groups.forEach((group) => {
         flatRows.push({
           group,
-          bs_class_name: bsClass.bs_class_name,
+          bs_class_name: normalizeBsClassName(bsClass.bs_flag, bsClass.bs_class_name),
           bs_group: bsGroup.bs_group,
           bs_group_name: bsGroup.bs_group_name,
           bs_flag: bsClass.bs_flag,
@@ -1041,7 +1058,7 @@ const DepartmentBudgetTemplate: React.FC<Props> = ({ departmentId, fiscalYear, o
             {uniqueBsClasses.map((f) => {
               const c = template.hierarchy.find((x) => x.bs_flag === f);
               return (
-                <option key={f} value={f}>{c?.bs_class_name ?? `Class ${f}`}</option>
+                <option key={f} value={f}>{normalizeBsClassName(f, c?.bs_class_name)}</option>
               );
             })}
           </select>
@@ -1317,7 +1334,7 @@ const DepartmentBudgetTemplate: React.FC<Props> = ({ departmentId, fiscalYear, o
                   ) : (
                     <ChevronRight className="w-5 h-5 text-gray-600" />
                   )}
-                  <span className="font-bold text-gray-900 text-lg">{bsClass.bs_class_name}</span>
+                  <span className="font-bold text-gray-900 text-lg">{normalizeBsClassName(bsClass.bs_flag, bsClass.bs_class_name)}</span>
                   <span className="text-xs text-gray-500 bg-gray-200 px-2 py-0.5 rounded">Level 1</span>
                 </div>
                 <div className="flex items-center gap-6 text-sm">

@@ -10,6 +10,9 @@ import { departmentAPI, coaDimensionAPI } from '../../services/api';
 interface BudgetingGroupInfo {
   group_id: number;
   group_name: string;
+  name_en?: string | null;
+  name_ru?: string | null;
+  name_uz?: string | null;
   category: string;
   bs_flag: number;
   bs_name: string;
@@ -71,6 +74,46 @@ interface HierarchyClass {
     }[];
   }[];
 }
+
+const RU_GROUP_NAME_TO_EN: Record<string, string> = {
+  'Счета купли и продажи, чистые': 'Trading accounts, net',
+  'Драгоценные металлы, монеты, камни, чистые': 'Precious metals, coins and stones, net',
+  'Инвестиции, чистые': 'Investments, net',
+  'Кредиты и лизинговые операции, брутто': 'Loans and leasing operations, gross',
+  'Минус: Резерв возможных убытков': 'Less: Allowance for possible losses',
+  'Основные средства, чистые': 'Fixed assets, net',
+  'Начисленные проценты к получению, брутто': 'Accrued interest receivable, gross',
+  'Начисленные беспроцентные доходы к получению, брутто': 'Accrued non-interest income receivable, gross',
+};
+
+const RU_TOKEN_TO_EN: Array<[RegExp, string]> = [
+  [/^Минус:\s*/i, 'Less: '],
+  [/\bСчета купли и продажи\b/gi, 'Trading accounts'],
+  [/\bДрагоценные металлы, монеты, камни\b/gi, 'Precious metals, coins and stones'],
+  [/\bИнвестиции\b/gi, 'Investments'],
+  [/\bКредиты и лизинговые операции\b/gi, 'Loans and leasing operations'],
+  [/\bРезерв возможных убытков\b/gi, 'Allowance for possible losses'],
+  [/\bОсновные средства\b/gi, 'Fixed assets'],
+  [/\bНачисленные проценты к получению\b/gi, 'Accrued interest receivable'],
+  [/\bНачисленные беспроцентные доходы к получению\b/gi, 'Accrued non-interest income receivable'],
+  [/\bбрутто\b/gi, 'gross'],
+  [/\bчистые\b/gi, 'net'],
+];
+
+const toEnglishGroupLabel = (group: BudgetingGroupInfo): string => {
+  if (group.name_en && group.name_en.trim()) return group.name_en.trim();
+  const raw = (group.group_name || '').trim();
+  if (!raw) return 'Unnamed group';
+
+  const direct = RU_GROUP_NAME_TO_EN[raw];
+  if (direct) return direct;
+
+  let translated = raw;
+  for (const [pattern, replacement] of RU_TOKEN_TO_EN) {
+    translated = translated.replace(pattern, replacement);
+  }
+  return translated;
+};
 
 // ── Budget Structure Page ──────────────────────────────────────────────────
 const BudgetStructure: React.FC = () => {
@@ -322,7 +365,7 @@ const MappingTab: React.FC<{
                   <div key={g.group_id} className="border border-gray-200 dark:border-slate-700 rounded-lg p-4 hover:shadow-md transition-shadow">
                     <div className="flex items-start justify-between">
                       <div>
-                        <div className="font-medium text-gray-900 dark:text-white">{g.group_name}</div>
+                        <div className="font-medium text-gray-900 dark:text-white">{toEnglishGroupLabel(g)}</div>
                         <div className="text-xs text-gray-500 mt-1">{g.bs_name}</div>
                       </div>
                       <span className={`px-2 py-1 rounded text-xs font-medium ${
@@ -364,7 +407,7 @@ const MappingTab: React.FC<{
                           onChange={() => toggleGroup(g.group_id)}
                           className="w-4 h-4 text-primary-600 rounded focus:ring-primary-500"
                         />
-                        <span className="text-gray-900 dark:text-white">{g.group_name}</span>
+                        <span className="text-gray-900 dark:text-white">{toEnglishGroupLabel(g)}</span>
                         <span className="text-xs text-gray-400 ml-auto">{g.account_count} accounts</span>
                       </label>
                     ))}

@@ -96,6 +96,24 @@ const formatCurrency = (num: number): string => {
   return num.toFixed(0);
 };
 
+const normalizeBsClassName = (bsFlag: number, rawName?: string): string => {
+  const byFlag: Record<number, string> = {
+    1: 'Assets',
+    2: 'Liabilities',
+    3: 'Capital',
+    9: 'Off-balance',
+  };
+  if (byFlag[bsFlag]) return byFlag[bsFlag];
+
+  const n = (rawName || '').toLowerCase();
+  if (n.includes('актив')) return 'Assets';
+  if (n.includes('мажбур') || n.includes('обязател')) return 'Liabilities';
+  if (n.includes('капитал')) return 'Capital';
+  if (n.includes('off') || n.includes('внебал')) return 'Off-balance';
+  if (rawName && rawName.trim()) return rawName;
+  return `Class ${bsFlag}`;
+};
+
 const DriverConfigPanel: React.FC<Props> = ({ fiscalYear, onApplied }) => {
   const [drivers, setDrivers] = useState<DriverOption[]>([]);
   const [groups, setGroups] = useState<GroupDriverConfig[]>([]);
@@ -252,7 +270,9 @@ const DriverConfigPanel: React.FC<Props> = ({ fiscalYear, onApplied }) => {
   const byClass: Record<number, { name: string; groups: GroupDriverConfig[] }> = {};
   for (const g of groups) {
     const flag = g.bs_flag ?? 0;
-    if (!byClass[flag]) byClass[flag] = { name: g.bs_class_name || `Class ${flag}`, groups: [] };
+    if (!byClass[flag]) {
+      byClass[flag] = { name: normalizeBsClassName(flag, g.bs_class_name), groups: [] };
+    }
     byClass[flag].groups.push(g);
   }
 

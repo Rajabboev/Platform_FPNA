@@ -25,9 +25,10 @@ import {
   BarChart,
   Activity,
   Sparkles,
+  FlaskConical,
 } from 'lucide-react';
 import { authAPI, approvalsAPI, connectionsAPI, etlAPI } from '../services/api';
-import { BudgetStructure, DriversPage, CurrenciesPage } from './fpna';
+import { BudgetStructure, DriversPage, CurrenciesPage, MetadataLogicV2Page } from './fpna';
 import { AIAssistant } from './AIAssistant';
 import { DataIntegrationPage } from './DataIntegration';
 import { VarianceReportPage } from './VarianceReport';
@@ -38,6 +39,7 @@ import ReportingHub from './ReportingHub';
 import DepartmentBudgetTemplate from './budget/DepartmentBudgetTemplate';
 import LoginPage from './LoginPage';
 import AppHeader from './AppHeader';
+import UserManagementPage from './UserManagementPage';
 
 // Status Badge Component
 const StatusBadge = ({ status }: { status: string }) => {
@@ -954,6 +956,7 @@ const FPNAApp = () => {
               <div className="mt-1 space-y-0.5">
                 <NavItem page="coa" icon={Layers} label="Budget Structure" indent />
                 <NavItem page="drivers" icon={Calculator} label="Drivers" indent />
+                <NavItem page="drivers-v2-test" icon={FlaskConical} label="Drivers V2 Test" indent />
                 <NavItem page="currencies" icon={Banknote} label="Currencies & FX" indent />
               </div>
             )}
@@ -1051,6 +1054,7 @@ const FPNAApp = () => {
           {currentPage === 'coa' && <BudgetStructure />}
           {currentPage === 'currencies' && <CurrenciesPage />}
           {currentPage === 'drivers' && <DriversPage />}
+          {currentPage === 'drivers-v2-test' && <MetadataLogicV2Page />}
           {currentPage === 'ai-assistant' && <AIAssistant theme={theme} fiscalYear={2026} />}
           {currentPage === 'budget-planning' && <BudgetPlanningNew />}
           {currentPage === 'reporting' && <ReportingHub theme={theme} />}
@@ -1068,22 +1072,11 @@ const FPNAApp = () => {
             </div>
           )}
           {currentPage === 'users' && (
-            <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-8">
-              <div className="flex items-center gap-4 mb-6">
-                <div className="w-12 h-12 bg-primary-100 rounded-xl flex items-center justify-center">
-                  <Users className="w-6 h-6 text-primary-600" />
-                </div>
-                <div>
-                  <h1 className="text-2xl font-bold text-gray-900">User Management</h1>
-                  <p className="text-gray-600">Manage users, roles, and permissions</p>
-                </div>
-              </div>
-              <div className="text-center py-12 text-gray-500">
-                <Users className="w-16 h-16 mx-auto mb-4 text-gray-300" />
-                <p className="text-lg font-medium">User management module</p>
-                <p className="text-sm mt-2">Configure user access and role assignments</p>
-              </div>
-            </div>
+            <UserManagementPage
+              currentUserId={user.id}
+              currentUser={user}
+              canManageUsers={hasRole('ADMIN', 'CFO')}
+            />
           )}
           </div>
         </div>
